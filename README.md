@@ -25,7 +25,7 @@ Example of Engine Structure
 |       Here is an example of a the default *Download* "workflow"...                  |
 |                                                                                     |
 |        +-----------------------------+                                              |
-         |  ROOT                       |                                              |
+|        |  ROOT                       |                                              |
 |        |  +----------------------+   |                                              |
 |        |  | Stack.Download       |   |                                              |
 |        |  |   CheckContents()    |   |                                              |
