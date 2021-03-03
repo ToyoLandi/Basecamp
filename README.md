@@ -22,8 +22,8 @@ Formally known as "LogQuery", **"logGuru" is a GUI and/or CLI automation engine 
 |   [API Command] -->                                                                 |
 |                                                                                     |
 |   Stack."Workflow" is a predefined list of *Task*'s to run in order. See            |
-|       Stack.Download below for trace of how the Download "workflow" is                          |
-|       Defined.                                                                              |
+|       Stack.Download below for trace of how the Download "workflow" is              |
+|       Defined.                                                                      |
 |                                                                                     |
 |        +-----------------------------+                                              |
 |        |  ROOT                       |                                              |
