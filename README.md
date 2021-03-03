@@ -1,21 +1,55 @@
-# logGuru 
-<p align="center">
-  Philosphy : a haiku  
-</p>
-<p align="center">
-  Bring Zen to your work
- </p> 
-<p align="center">  
-  Repeitition prevents flow   
- </p> 
-<p align="center">
-  Simplify the task  
-</p>
+# logGuru - *Bringing Zen to the TSE workflow.*
+*Authored by Collin Spears, Network TSE.*
 
-Formally known as "LogQuery", 'logGuru' is a GUI and CLI automation engine with the goal to simplify the case data management process for TSE's working with McAfee Enterprise Products.
+# Overview and Design Philosphy
+Project Philosophy : a Haiku
+> Bring Zen to *YOUR* work  
+> Repeitition prevents flow     
+> Simplify the task  
 
-This app, tool, engine, script, whatever you want to call it - can be divided into three parts. "root", "Extension", and "API". Putting "Extension" and "API" asside for the moment, lets quickly look at 'root'.
-       
+Formally known as "LogQuery", **"logGuru" is a GUI and/or CLI automation engine with the goal to automate the repeatable and often tedious tasks for TSE's working with McAfee Enterprise Products.** This app, tool, engine, script, whatever you want to call it - can be divided into three parts. *Root*, *Extension*, and *API"* which we will discuss more in a moment. Lastly, you will see the word *Task* - italized and capilitzed throughout this guide; a *Task* is any code block (Class, Function, etc.) 
+
+* **Root** - All of the main elements of logGuru. This includes the *GUI*, *Framework Logic*, and *Tasks* Classes 
+* **Extension** - Contains *user* defined *Task* or code to extend functionality of logGuru. Following "Bring Zen to *YOUR* work"
+* **API** - A fully-featured CLI to call the *Task*'s defined in Root. Providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
+
+Example of Engine Structure
+```
++=====================================================================================+  
+|                                                                                     |  
+|   [GUI Event] -->                                                                   |
+|           [SR Number, Sub_Folder*, and "Workflow"] --> Calls Root.Stack."Workflow"  |  
+|   [API Command] -->                                                                 |
+|                                                                                     |
+|      Stack."Workflow" is a predefined list of *Task*'s to run in order.             |
+|       Here is an example of a the default *Download* "workflow"...                  |
+|                                                                                     |
+|        +-----------------------------+                                              |
+         |  ROOT                       |                                              |
+|        |  +----------------------+   |                                              |
+|        |  | Stack.Download       |   |                                              |
+|        |  |   CheckContents()    |   |                                              |
+|        |  |   Download()         |   |                                              |
+|        |  |   ZipUnpacker()      |   |                                              |
+|        |  |   **Extension_Task** |   |                                              |
+|        |  |   ParsingEngine()    |   |                                              |
+|        |  +----------------------+   |                                              |
+|        |                             |                                              |
+|        |  +----------------------+   |                                              |
+|        |  | GUI                  |   |                                              |
+|        |  |   UI Elements        |   |                                              |
+|        |  |   Daemons            |   |                                              |
+|        |  |   Launch             |   |                                              |
+|        |  +----------------------+   |                                              |
+|        +-----------------------------+                                              |
+|                                                                                     |
+|                                                                                     |
+|                                                                                     |
+|                                                                                     |
+|                                                                                     |
++=====================================================================================+
+```
+
 # "root" 
 "logGuru_beta' is 'root' and is where the main functionality of the engine is defined. The Graphic User-Interface (Gui), Download, Upload, Parsing, and Cleanup classes, all core elements of are defined here. 
 
