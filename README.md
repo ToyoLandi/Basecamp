@@ -13,7 +13,7 @@ Formally known as "LogQuery", **"logGuru" is a GUI and/or CLI automation engine 
 * **Extension** - Contains *user* defined *Task* or code to extend functionality of logGuru. Following "Bring Zen to *YOUR* work"
 * **API** - A fully-featured CLI to call the *Task*'s defined in Root. Providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
 
-Example of Engine Structure
+# Engine Layout and Design
 ```
 +=====================================================================================+  
 |                                                                                     |  
@@ -21,31 +21,37 @@ Example of Engine Structure
 |           [SR Number, Sub_Folder*, and "Workflow"] --> Calls Root.Stack."Workflow"  |  
 |   [API Command] -->                                                                 |
 |                                                                                     |
-|      Stack."Workflow" is a predefined list of *Task*'s to run in order.             |
-|       Here is an example of a the default *Download* "workflow"...                  |
+|   Stack."Workflow" is a predefined list of *Task*'s to run in order. See            |
+|       Stack.Download below for trace of how the Download "workflow" is                          |
+|       Defined.                                                                              |
 |                                                                                     |
 |        +-----------------------------+                                              |
 |        |  ROOT                       |                                              |
-|        |  +----------------------+   |                                              |
-|        |  | Stack.Download       |   |                                              |
-|        |  |   CheckContents()    |   |                                              |
-|        |  |   Download()         |   |                                              |
-|        |  |   ZipUnpacker()      |   |                                              |
-|        |  |   **Extension_Task** |   |                                              |
-|        |  |   ParsingEngine()    |   |                                              |
-|        |  +----------------------+   |                                              |
-|        |                             |                                              |
-|        |  +----------------------+   |                                              |
-|        |  | GUI                  |   |                                              |
-|        |  |   UI Elements        |   |                                              |
-|        |  |   Daemons            |   |                                              |
-|        |  |   Launch             |   |                                              |
-|        |  +----------------------+   |                                              |
-|        +-----------------------------+                                              |
-|                                                                                     |
-|                                                                                     |
-|                                                                                     |
-|                                                                                     |
+|        |  +----------------------+   |      +-----------------------------+         |
+|        |  | Stack.Download       |   |      |  EXTENSION                  |         |
+|        |  |   CheckContents()    |   |      |  +-----------------------+  |         | 
+|        |  |   Download()         |   |      |  |  Download()              |         |
+|        |  |   ZipUnpacker()      |   |      |  |   *User-Written Code  |  |         |
+|        |  |   **Extension_Task** |  <~~~~~~~~~ +-----------------------+  |         |
+|        |  |   ParsingEngine()    |   |      |                             |         |
+|    +~~~~~ +----------------------+   |      |  +-----------------------+  |         |
+|    :   |                             |      |  |   Other "Workflow"    |  |         |
+|    :   |  +----------------------+   |      |  |      Functions        |  |         |
+|    :   |  | GUI                  |   |      |  +-----------------------+  |         |
+|    :   |  |   UI Elements        |   |      +-----------------------------+         |
+|    :   |  |   Daemons            |   |                                              |
+|    :   |  |   Launch             |   |      +-----------------------------+         |                              
+|    :   |  +----------------------+   |      |  API                        |         |
+|    :   |                             |      |  +-----------------------+  |         | 
+|    :   |  +----------------------+   |      |  | Download(sub_fol, sr) |  |         |                        
+|    :   |  |    Misc. Classes     |   |   +~~~~~~~~>   *code from root  |  |         |                               
+|    :   |  +----------------------+   |   :  |  +-----------------------+  |         |                          
+|    :   |                             |   :  |                             |         | 
+|    :   +-----------------------------+   :  |  +-----------------------+  |         |                           
+|    :                                     :  |  |   Other "Workflow"    |  |         |                  
+|    +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+  |  |      Functions        |  |         |
+|                                             |  +-----------------------+  |         |
+|                                             +-----------------------------+         |
 |                                                                                     |
 +=====================================================================================+
 ```
