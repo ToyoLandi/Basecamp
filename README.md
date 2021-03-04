@@ -7,11 +7,7 @@ Project Philosophy : a Haiku
 > Repeitition prevents flow     
 > Simplify the task  
 
-Formally known as "LogQuery", **logGuru is a GUI and/or CLI automation engine with the goal to automate the repeatable and often tedious tasks for TSE's working with McAfee Enterprise Products.** The *Engine* behind logGuru has been designed to fundamentally promote the *Project Philosophy* and allow the project to scale to the limits of Engineer's imgainations. Two important terms used throughout this guide that we will define quickly... *Workflow* and *Task*. A *Workflow* is a list of *Task* that are ran, in order, when a user either interacts with
-
-**Root** - All of the main elements of logGuru. This includes the *GUI*, *Framework Logic*, and *Tasks* Classes 
-* **Extension** - Contains *user* defined *Task* or code to extend functionality of logGuru. Following "Bring Zen to *YOUR* work"
-* **API** - A fully-featured CLI to call the *Task*'s defined in Root. Providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
+**logGuru is a GUI and/or CLI tool with the goal to automate the repeatable and often tedious tasks for TSE's supporting McAfee Enterprise Products.** The *Engine* behind **logGuru** has been designed to fundamentally promote the *Project Philosophy* and allow the project to scale to the limits of Engineer's imgainations and needs. With the modular framework of the *Engine*, users are able to "expand" the functionality of **logGuru** to adapt to THEIR workflow by writing their own code in **Extension**. Allowing **logGuru** to serve any Engineer's needs, while providing an elegant, powerful, and feature-rich base. Finally, It is important that **logGuru** remains Open-source and true to the *Project Philosophy* - I personally feel this will keep this project true to the original intent, "Bringing Zen to the *TSE* workflow."
 
 # Engine Layout and Design
 ```
@@ -44,9 +40,9 @@ Formally known as "LogQuery", **logGuru is a GUI and/or CLI automation engine wi
                 |    :   |  +----------------------+   |      |  API                        |         |
                 |    :   |                             |      |  +-----------------------+  |         | 
                 |    :   |  +----------------------+   |      |  | Download(sub_fol, sr) |  |         |                        
-                |    :   |  |    Misc. Classes     |   |   +~~~~~~~~>   *code from root  |  |         |                               
-                |    :   |  +----------------------+   |   :  |  +-----------------------+  |         |                          
-                |    :   |                             |   :  |                             |         | 
+                |    :   |  |   Other "Workflow"   |   |   +~~~~~~~~>   *code from root  |  |         |                               
+                |    :   |  |      Functions       |   |   :  |  +-----------------------+  |         |                          
+                |    :   |  +----------------------+   |   :  |                             |         | 
                 |    :   +-----------------------------+   :  |  +-----------------------+  |         |                           
                 |    :                                     :  |  |   Other "Workflow"    |  |         |                  
                 |    +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+  |  |      Functions        |  |         |
@@ -55,6 +51,20 @@ Formally known as "LogQuery", **logGuru is a GUI and/or CLI automation engine wi
                 |                                                                                     |
                 +=====================================================================================+
 ```
+**Task** 
+> A function that is ran during a *Workflow*
+> Often I/O operations for *Case Data* such as "ParsingEngine"
+> **Workflow**
+> A list of *Task* that are ran in order, when a user interacts with certain GUI elements, or a particular "lguru.py -Argument".
+> A *Workflow* will ALWAYS contain a target *SR Number* and optional *Sub Directory*
+**Root** 
+> All of the main elements of logGuru. This includes the *GUI*, *Framework Logic*, and *Tasks* Classes 
+* **Extension**
+> Contains *user* defined *Task* or code to extend functionality of logGuru. Following "Bring Zen to *YOUR* work"
+**API** 
+> A fully-featured CLI to call the *Task*'s defined in Root. Providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
+
+
 
 # "Root" 
 "logGuru_beta' is *Root* and is where the main functionality of the engine is defined. There are four "types" of classes within *Root* - Catagorized to maintain modularity and readability when viewing the source code. 
