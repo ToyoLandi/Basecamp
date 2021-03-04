@@ -24,7 +24,7 @@ Project Philosophy : a Haiku
                 |        +-----------------------------+                                              |
                 |        |  ROOT                       |                                              |
                 |        |  +----------------------+   |      +-----------------------------+         |
-                |        |  | Stack.Download       |   |      |  EXTENSION                  |         |
+                |        |  | Workflow.Download    |   |      |  EXTENSION                  |         |
                 |        |  |   CheckContents()    |   |      |  +-----------------------+  |         | 
                 |        |  |   Download()         |   |      |  |  Download()              |         |
                 |        |  |   ZipUnpacker()      |   |      |  |   *User-Written Code  |  |         |
@@ -40,7 +40,7 @@ Project Philosophy : a Haiku
                 |    :   |  +----------------------+   |      |  API                        |         |
                 |    :   |                             |      |  +-----------------------+  |         | 
                 |    :   |  +----------------------+   |      |  | Download(sub_fol, sr) |  |         |                        
-                |    :   |  |   Other "Workflow"   |   |   +~~~~~~~~>   *code from root  |  |         |                               
+                |    :   |  |     Other "Task"     |   |   +~~~~~~~~>   *code from root  |  |         |                               
                 |    :   |  |      Functions       |   |   :  |  +-----------------------+  |         |                          
                 |    :   |  +----------------------+   |   :  |                             |         | 
                 |    :   +-----------------------------+   :  |  +-----------------------+  |         |                           
@@ -52,67 +52,45 @@ Project Philosophy : a Haiku
                 +=====================================================================================+
 ```
 **Task** 
-> A function that is ran during a *Workflow*
+> A function that is ran during a *Workflow*  
 > Often I/O operations for *Case Data* such as "ParsingEngine"
 
-> **Workflow**
-> A list of *Task* that are ran in order, when a user interacts with certain GUI elements, or a particular "lguru.py -Argument".
-> A *Workflow* will ALWAYS contain a target *SR Number* and optional *Sub Directory*
+**Workflow**
+> A list of *Task* that are ran in order, when a user interacts with certain GUI elements, or a particular "lguru.py -Argument".  
+> A *Workflow* will ALWAYS contain a target *SR Number* and optional *Sub Directory*  
 
 **Root** 
 > All of the main elements of logGuru. This includes the *GUI*, *Framework Logic*, and *Tasks* Classes 
 
-* **Extension**
+**Extension**
 > Contains *user* defined *Task* or code to extend functionality of logGuru. Following "Bring Zen to *YOUR* work"
 
 **API** 
-> A fully-featured CLI to call the *Task*'s defined in Root. Providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
+> A fully-featured CLI to call "Workflows", providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
+
+# **Root** 
+All of the main elements of logGuru are found in "logGuru_beta.py", called "Root" through this guide. This file is organized into three types of classes, *GUI*, *Engine*, and *Task*. 
+
+**GUI**
+> Code only needed to provide a UI and run *Workflow*'s.
+> This includes daemons that maintain Threading and Metric Server connectivity without hanging the UI state.
+> **logGuru** uses the native Tkinter/Tcl library in Python3 to render GUI elements.
+
+**Engine**
+> All code related to constructing the default "logGuru_extension.py" and "logGuru_config.py" files on install.
+> Logic that safely handles User written code.
+> Exposes functionality added in "Extension" to the "API" 
+> All "Workflow" Definitions
+
+**Task**
+> Functions that are called to complete a *Workflow*
+> Examples include "Download" and "Zip_Unpacker"
+> Often I/O operations
 
 
+# **Extension** 
+As each product team has a different approach to unpacking case data. "Extension.py" has been designed to extend functionality beyond the core elements found in "Root". This design also provides some seperation between the core project, and the possibly hundreds of different configurations. Allowing *some* sanity when troubleshooting bugs by only being responsible for maintaining the **Root** project. To do this, **Extension** has hooks throughout **Root**, to run the "extension" code at the right time... 
 
-# "Root" 
-"logGuru_beta' is *Root* and is where the main functionality of the engine is defined. There are four "types" of classes within *Root* - Catagorized to maintain modularity and readability when viewing the source code. 
-
-Gui(tK) - This is where the UI is built. The window, buttons, dropdown boxes, .etc are defined here. As well as what commands are called when elements are interacted with. 
-Download(thread) - A threaded process that intelligently downloads SR data from the remote "support_case_server", to a local folder called "Case Data"(User-Defined). There is built-in logic to only download files or directories that have not already been fetched. A "Download thread" is created whenever an Engineer clicks download, or calls the "download" module via the CLI. A "Download thread" is always intialized with two string args, "sub_folder" and a "sr_number" in that order. 
-Upload(Thread) - The same design as Download, just uploading files from "Case Data"(User-Defined) back to the remote "suport_case_server". 
-Parsing(Thread) - Users can define parsing rules within "config.py" that will automatically parse data from keyworded files to a formatted .txt file stored within each SR's data folder. From a currently limited set, users can choose parsing "modes" such as line number, and simple regEx expressions. This engine is ran by default, after an Engineer clicks Download, when "Download thread" and "autoLogs_extension.download" have been called. 
-CleanUp(Thread) - Users can define an "X" number of days since modified for content within "Case Data"(User-Defined) to be marked for deletion. I would love to expand this module with the ability to query Insight for SR state, But for now, the default is 90 days. 
-
-And if you made it through all that text, now lets talk about "Extension" and "API". Grab some beer or some tea, as this will be a bit more programming focused... 
-
-# "Extension" 
-As each product team has a different approach to unpacking case data. "Extension.py" has been designed to extend functionality beyond the core elements decribed in 'root'. This design also provides some seperation between the core project, and the possibly hundreds of different configurations. Allowing some* sanity when troubleshooting bugs, by only being responsible for maintaining the 'root' framework. To do this, "Extension" has hooks throughout 'root', to run the "extension" code at the right time... 
-
-    logGuru_extension.config() - Called at the end @ "Core.Setup.config()". 
-    logGuru_extension.download() - Called after download thread is put in queue. @ "Core.Gui.download_button()". 
-    logGuru_extension.upload() - Called after upload thread is put in queue. @ "Core.Gui.upload_button()". 
-    logGuru_extension.final_result() - This should return a string thatcontains the results of work completed on case data. This is appended @ Core.Download.run.stack_results 
-    logGuru_extension.final_usage_log() - This should return a string that contains the results message sent to the "log" server. This is appended @ Core.Download.run.unpack_metrics 
-
-- Adding classes, functions, and other code - 
-    With the design philosphy in mind, you can write anything you can think of here. If its python code, it should run. If you are not quite sure what you would put here, the Network team (where I work) uses the extension file to define unpacking functions that handle NSP/ATD encrypted logs. Very similar to "zip_engine" found @core.ZipEngine. 
-
-- Some important considerations - 
-    Because "Extension" is imported into 'root', the file cannot be renamed. It is recommended to change the "version" number declared at the top of the python file to keep track of changes and aid you in troubleshooting. The "LGE" version is show in 'root's GUI or can be shown when running "python3 lguru.py -e" or "--lge_version" 
-
-    If you want to do work on files that were just downloaded, or If you wish to update the progress bar tag, the task must be ran as a "thread". 'root' handles most of this for you, but you will need to know how to call it correctly... 
-
-    Declaring a function a "thread" 
-        thread_obj = threading.Thread(target=<func_name>, name=<"string" or var>) 
-
-    Calling/Starting the "thread" 
-        "LQ_QUEUE.put((<Priority Value>, <thread_obj>.start()))" 
-
-    Priority Values can be : 0 [High] 1 [Med] 2 [Low] and so on... 
-        This value determines the order in which task are ran in the Queue. 
-        Download thread's priority value is 0 
-        Upload thread's priority value is 1 
-        Cleanup thread's priority value is 2 
 
 # "API" 
-This should be much shorter than the above descriptions. "API" which is actually named "lguru.py" in the root directory, is another way to work with LogGuru. "API" does not provide a GUI, instead, users can call "API" via command-prompt with arguments to that mirror the functionality of using the guided interface. This allows Engineers to leverage the features found in LogGuru to third party applications. Here is an example of a download request with a subfolder defined. 
-    cmd> cd /path/to/LogGuru 
-    cmd> python3 lguru.py -d 4-22234571621 -s Collins_Guitar_Repair 
-
-    This funtionality will grow over-time, but for more specifics, see... cmd> python3 lguru.py -h
+The API is a "wrapper" that allows Engineers to call the same *Workflows* defined in **Root** through a CLI. Besides the obvious benefit of appealing to Engineers who prefer CLI applications, this also helps adhere to the *Project Philosophy* by letting other applications or scripts use the automation pre-built into the tool.
