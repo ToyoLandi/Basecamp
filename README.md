@@ -72,20 +72,20 @@ Project Philosophy : a Haiku
 All of the main elements of logGuru are found in "logGuru_beta.py", called "Root" through this guide. This file is organized into three types of classes, *GUI*, *Engine*, and *Task*. 
 
 **GUI**
-> Code only needed to provide a UI and run *Workflow*'s.
-> This includes daemons that maintain Threading and Metric Server connectivity without hanging the UI state.
-> **logGuru** uses the native Tkinter/Tcl library in Python3 to render GUI elements.
+> Code only needed to provide a UI and run *Workflow*'s.  
+> This includes daemons that maintain Threading and Metric Server connectivity without hanging the UI state.  
+> **logGuru** uses the native Tkinter/Tcl library in Python3 to render GUI elements.  
 
 **Engine**
-> All code related to constructing the default "logGuru_extension.py" and "logGuru_config.py" files on install.
-> Logic that safely handles User written code.
-> Exposes functionality added in "Extension" to the "API" 
-> All "Workflow" Definitions
+> All code related to constructing the default "logGuru_extension.py" and "logGuru_config.py" files on install.  
+> Logic that safely handles User written code.  
+> Exposes functionality added in "Extension" to the "API"   
+> All "Workflow" Definitions  
 
 **Task**
-> Functions that are called to complete a *Workflow*
-> Examples include "Download" and "Zip_Unpacker"
-> Often I/O operations
+> Functions that are called to complete a *Workflow*  
+> Examples include "Download" and "Zip_Unpacker"  
+> Often I/O operations  
 
 
 # **Extension** 
