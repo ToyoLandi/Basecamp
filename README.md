@@ -54,13 +54,17 @@ Project Philosophy : a Haiku
 **Task** 
 > A function that is ran during a *Workflow*
 > Often I/O operations for *Case Data* such as "ParsingEngine"
+
 > **Workflow**
 > A list of *Task* that are ran in order, when a user interacts with certain GUI elements, or a particular "lguru.py -Argument".
 > A *Workflow* will ALWAYS contain a target *SR Number* and optional *Sub Directory*
+
 **Root** 
 > All of the main elements of logGuru. This includes the *GUI*, *Framework Logic*, and *Tasks* Classes 
+
 * **Extension**
 > Contains *user* defined *Task* or code to extend functionality of logGuru. Following "Bring Zen to *YOUR* work"
+
 **API** 
 > A fully-featured CLI to call the *Task*'s defined in Root. Providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
 
