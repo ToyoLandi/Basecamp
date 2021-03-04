@@ -7,9 +7,9 @@ Project Philosophy : a Haiku
 > Repeitition prevents flow     
 > Simplify the task  
 
-Formally known as "LogQuery", **"logGuru" is a GUI and/or CLI automation engine with the goal to automate the repeatable and often tedious tasks for TSE's working with McAfee Enterprise Products.** This app, tool, engine, script, whatever you want to call it - can be divided into three parts. *Root*, *Extension*, and *API"* which we will discuss more in a moment. Lastly, you will see the word *Task* - italized and capilitzed throughout this guide; a *Task* is any code block (Class, Function, etc.) 
+Formally known as "LogQuery", **logGuru is a GUI and/or CLI automation engine with the goal to automate the repeatable and often tedious tasks for TSE's working with McAfee Enterprise Products.** The *Engine* behind logGuru has been designed to fundamentally promote the *Project Philosophy* and allow the project to scale to the limits of Engineer's imgainations. Two important terms used throughout this guide that we will define quickly... *Workflow* and *Task*. A *Workflow* is a list of *Task* that are ran, in order, when a user either interacts with
 
-* **Root** - All of the main elements of logGuru. This includes the *GUI*, *Framework Logic*, and *Tasks* Classes 
+**Root** - All of the main elements of logGuru. This includes the *GUI*, *Framework Logic*, and *Tasks* Classes 
 * **Extension** - Contains *user* defined *Task* or code to extend functionality of logGuru. Following "Bring Zen to *YOUR* work"
 * **API** - A fully-featured CLI to call the *Task*'s defined in Root. Providing a powerful alternative to the GUI by sharing **Root**, and **Extension** code.
 
@@ -56,8 +56,8 @@ Formally known as "LogQuery", **"logGuru" is a GUI and/or CLI automation engine 
                 +=====================================================================================+
 ```
 
-# "root" 
-"logGuru_beta' is 'root' and is where the main functionality of the engine is defined. The Graphic User-Interface (Gui), Download, Upload, Parsing, and Cleanup classes, all core elements of are defined here. 
+# "Root" 
+"logGuru_beta' is *Root* and is where the main functionality of the engine is defined. There are four "types" of classes within *Root* - Catagorized to maintain modularity and readability when viewing the source code. 
 
 Gui(tK) - This is where the UI is built. The window, buttons, dropdown boxes, .etc are defined here. As well as what commands are called when elements are interacted with. 
 Download(thread) - A threaded process that intelligently downloads SR data from the remote "support_case_server", to a local folder called "Case Data"(User-Defined). There is built-in logic to only download files or directories that have not already been fetched. A "Download thread" is created whenever an Engineer clicks download, or calls the "download" module via the CLI. A "Download thread" is always intialized with two string args, "sub_folder" and a "sr_number" in that order. 
