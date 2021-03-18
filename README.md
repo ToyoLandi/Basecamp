@@ -1,4 +1,4 @@
-# logGuru - *Bringing Zen to the TSE workflow.*
+# logFlow - *Bringing Zen to the TSE workflow.*
 *Authored by Collin Spears, Network TSE.*
 
 # Overview and Design Philosphy
