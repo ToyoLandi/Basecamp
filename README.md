@@ -1,4 +1,4 @@
-# logFlow - *Bringing Zen to the TSE workflow.*
+# Basecamp - *Bringing Zen to the TSE workflow.*
 *Authored by Collin Spears, Network TSE.*
 
 # Overview and Design Philosphy
