@@ -1,0 +1,71 @@
+{
+    "version": "0.1 BETA",
+    "install_path": "C:\\Users\\cspears1\\OneDrive - McAfee\\Desktop\\Basecamp Beta",
+    "local_path": "C:\\Users\\cspears1\\OneDrive - McAfee\\Desktop\\Basecamp Beta\\downloads",
+    "remote_path": "\\\\dnvcorpvf2.corp.nai.org\\nfs_dnvspr",
+    "time_zone": [
+        "Mountain Standard Time",
+        "Mountain Daylight Time"
+    ],
+    "time_format": "%m/%d/%y %H:%M",
+    "show_top_menu": true,
+    "unpackers": [],
+    "parsing_rules": {},
+    "workpanes": [],
+    "dev_mode": false,
+    "favorites": [],
+    "range_extensions": [
+        ".log",
+        ".dbg",
+        ".txt",
+        ".0",
+        ".1",
+        ".2",
+        ".3",
+        ".4",
+        ".5",
+        ".6",
+        ".7",
+        ".8",
+        ".9",
+        ".10",
+        ".11",
+        ".12",
+        ".13",
+        ".14",
+        ".15",
+        ".16"
+    ],
+    "automations": [
+        {
+            "name": "ZIP-Unpack",
+            "extensions": [
+                [
+                    ".zip",
+                    ".tar"
+                ]
+            ],
+            "exe": null,
+            "downloadFirst": false
+        },
+        {
+            "name": "NSP-Sensor-Unpack",
+            "extensions": [
+                ".enc"
+            ],
+            "exe": "C:\\Program Files (x86)\\Nsp Report\\nsp_report.exe",
+            "downloadFirst": true
+        },
+        {
+            "name": "ATD-Unpack",
+            "extensions": [
+                ".bin"
+            ],
+            "exe": [
+                "C:\\Program Files (x86)\\Nsp Report\\atd-decryptfile.exe",
+                "C:\\Program Files\\7-Zip\\7z.exe"
+            ],
+            "downloadFirst": true
+        }
+    ]
+}

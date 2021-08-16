@@ -1,0 +1,8 @@
+{
+    "author": "Collin Spears, Network TSE",
+    "version": "1.1",
+    "extensions": ".bin",
+    "description": "This unpacker handles ATD support bundles. Automating the Decrpytion, password-protected unzip, and final unzip allowing you to get to your logs, painlessly :)",
+    "exe": ["C:\\Program Files (x86)\\Nsp Report\\atd-decryptfile.exe", "C:\\Program Files\\7-Zip\\7z.exe"],
+    "downloadFirst": true
+}
