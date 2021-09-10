@@ -25,6 +25,7 @@ import importlib
 import threading
 import py_compile
 import subprocess
+from tkinter import filedialog
 
 # GLOBAL BCAMP VERSION STRING
 BCAMP_VERSION = "DEV-Aug26"
@@ -523,7 +524,8 @@ def query_cases_distinct(column):
     dbcon.close()
     return_list = []
     for value in result:
-        return_list.append(value[0])
+        if value[0] != None: # Omit NONE values from list.
+            return_list.append(value[0])
     return return_list
 
 def query_case_exist(key_val):
@@ -1896,6 +1898,54 @@ def dump_parser():
 
 Shortcuts to make life easy, and save some sanity!
 '''
+def bulk_importer(import_item):
+    '''
+    Method used to import multiple
+    '''
+    def start_bulk_import(import_item, sr_num, product, account):
+        # Creating "import_item" Dictionary
+        new_import_dict = {
+            # Required Dict Vals
+            'sr_number': sr_num,
+            #'remote_path': None,  # Set in Finalize...
+            #'local_path': None, # Set in Finalize...
+            'pinned': 0, # Default = !Pinned
+            # Import/Calculated Values
+            'product': product.strip(),
+            'account': account.strip(),
+            #'import_time': None,
+            #'last_ran_time': None,
+            # Untouched Dict Vals for bulk
+            'bug_id': None,
+            'workspace': None,
+            'notes': None,
+            'tags_list': None,
+            'customs_list': None
+        }
+        # Updating "import_item" -> Gui.import_handler(new_import_dict)
+        import_item.value = new_import_dict
+
+    # Prompt user for file to import from.
+    src_file = filedialog.askopenfilename(
+        initialdir="/",
+        title="Basecamp Bulk Importer - Select a source import file!",
+        filetypes=[("Text files",
+                    "*.txt*")])
+
+    # Open resulting file
+    print("USER SELECTED IMPORT FILE:", src_file)
+    ifile = open(src_file, 'r')
+    ifile_content = ifile.readlines()
+    # Read lines of "ifile" and import one, by one.
+    for line in ifile_content:
+        print("-->", line)
+        # Splitting string to parse for account, and product vals.
+        split_line = line.split(', ')
+        # Order -> Sr_Num, Product, Account S
+        start_bulk_import(import_item, split_line[0], split_line[1], split_line[2])
+
+    
+
 def get_snapshot(path):
     '''
     Returns a single nested {<file_name>: {'path', 'type', etc.},} for all files
