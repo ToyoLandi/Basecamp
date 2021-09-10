@@ -72,6 +72,10 @@ TO-DO List
 import bcamp_api
 import bcamp_setup
 
+#DEBUG
+import pprint
+
+
 # Public Imports
 import io
 import os
@@ -202,14 +206,23 @@ class Gui(tk.Tk):
         # File Dropdown Menu
         self.tm_file = tk.Menu(self.top_menu, tearoff=0)
         self.tm_file.add_command(
-            label="New Import                Ctrl+N", command=self.render_new_import)
+            label="New Import                               Ctrl+N", command=self.render_new_import)
         self.tm_file.add_command(
-            label="Settings Menu            Ctrl+,", command=self.open_settings_menu)
+            label="New Bulk Import                      Ctrl+B", command=self.launch_bulk_importer)
+        self.tm_file.add_command(
+            label="Create Cases Backup               Ctrl+X", command=self.export_cases_backup)
+        self.tm_file.add_command(
+            label="Restore Cases Backup             Ctrl+R", command=self.import_cases_backup)
+        self.tm_file.add_separator()
+        self.tm_file.add_command(
+            label="Open Downloads                     Ctrl+D", command=self.reveal_download_loc)
+        self.tm_file.add_command(
+            label="Open Install Dir.                       Ctrl+I", command=self.reveal_install_loc)
+
+        self.tm_file.add_separator()
+        self.tm_file.add_command(
+            label="Settings Menu                          Ctrl+,", command=self.open_settings_menu)
         #self.tm_file.add_command(label="Open Theme Wizard", command=self.Tk_ThemeWizard)
-        self.tm_file.add_command(
-            label="Open Downloads       Ctrl+D", command=self.reveal_download_loc)
-        self.tm_file.add_command(
-            label="Open Install Dir.       Ctrl+I", command=self.reveal_install_loc)
 
         # View Dropdown Menu
         self.tm_view = tk.Menu(self.top_menu, tearoff=0)
@@ -348,6 +361,9 @@ class Gui(tk.Tk):
         self.bind('<Control-,>', self.open_settings_menu)
         self.bind('<Control-n>', self.Workbench.import_tab)
         self.bind('<Control-b>', self.toggle_CaseViewer)
+        self.bind('<Control-l>', self.launch_bulk_importer)
+        self.bind('<Control-x>', self.export_cases_backup)
+        self.bind('<Control-r>', self.import_cases_backup)
         self.bind('<Alt_L>', self.toggle_top_menu)
 
     def update_widgets(self):
@@ -488,6 +504,9 @@ class Gui(tk.Tk):
     def render_new_import(self, event=None):
         self.Workbench.import_tab()
 
+    def launch_bulk_importer(self, event=None):
+        bcamp_api.bulk_importer(Gui.import_item)
+
     def toggle_CaseViewer(self, event=None):
         '''
         Button and Keyboard Bind command to toggle the CaseViewer Pane, on the
@@ -517,6 +536,66 @@ class Gui(tk.Tk):
             empty_menu = tk.Menu(self)
             self.config(menu=empty_menu)
             bcamp_api.update_config('ui_render_top_menu', "False")
+
+    def export_cases_backup(self, event=None):
+        '''
+        Exports the imported case data, allowing this to be imported later.
+        '''
+        global ROOTPATH 
+
+        # Generating Binary output from content in DB
+        sr_list = bcamp_api.query_cases('sr_number')
+        all_data = [] # Source for Binary export using pickle.
+
+        for sr in sr_list:
+            db_data = bcamp_api.query_all_sr(sr[0])
+            sr_tags = bcamp_api.query_tags(sr[0])
+            dataset = {
+                'sr_number': db_data[0],
+                'remote_path': db_data[1],
+                'local_path': db_data[2],
+                'pinned': db_data[3],
+                'product': db_data[4],
+                'account': db_data[5],
+                'notes': db_data[6],
+                'bug_id': db_data[7],
+                'tags_list': sr_tags,
+                'workspace': None,
+                'customs_list': None
+            }
+            all_data.append(dataset)
+
+
+        # Prompting user to choose export location.
+        fpath = filedialog.askdirectory(
+                initialdir=ROOTPATH,
+                title="Basecamp - Export Location",
+            )
+        
+        # Saving 'binary_export' to 'fpath' location
+        timestamp = datetime.datetime.now()
+        outfile_name = "BasecampCases_" + str(timestamp.strftime("%Y-%m-%d")) + ".bkp"
+        print(outfile_name)
+        outfile = open(outfile_name, 'wb')
+        pickle.dump(all_data, outfile)
+
+    def import_cases_backup(self, event=None):
+        '''
+        Exports the imported case data, allowing this to be imported later.
+        '''
+        target_file = filedialog.askopenfile(
+            mode='rb',
+            initialdir=ROOTPATH,
+            title="Basecamp - Select Cases Backup File",
+        )
+        imported_dataset = pickle.load(target_file)
+        print("\n\nimport>>")
+        print(imported_dataset)
+
+        # Iterating through backup to generate values into DB.
+        for sr_set in imported_dataset:
+            self.import_handler(sr_set)
+
 
     # DB & Config Integration Methods
     def import_handler(self, new_import_data):
@@ -550,14 +629,16 @@ class Gui(tk.Tk):
             if not bcamp_api.query_case_exist(import_key_value):
                 bcamp_api.new_import(new_import_data)
                 self.CaseViewer.update_CaseViewer_tiles()
-                self.Workbench.render_workspace(import_key_value)
+                #self.Workbench.render_workspace(import_key_value)
                 # Create local 'downloads' folder.
                 try:
                     os.mkdir(self.RPATH + "\\downloads\\" + import_key_value)
                 except:
                     print("ERROR - Unable to create 'downloads' folder for ", import_key_value)
             else:
-                self.Workbench.render_workspace(import_key_value)
+                pass
+            print("WARN - SR has already been imported!")
+                #self.Workbench.render_workspace(import_key_value)
 
     # UI Callbacks
     def update_fb_prog(self, new_fileops_val):
@@ -872,16 +953,16 @@ class CustomTk_ScrolledFrame(tk.Frame):
 
     def resize(self, event=None):
         self._canvas.configure(scrollregion=self._canvas.bbox('all'))
-        #print("\n$sb", self._vertical_bar.get())
-        #if (self._vertical_bar.get())[1] <= 1:
-        #    self._vertical_bar.grid_forget()
-        #else:
-        #    self._vertical_bar.grid(row=0, column=1, sticky='ns')
 
     def inner_resize(self, event):
         # resize inner frame to canvas size
         if self.resize_width:
             self._canvas.itemconfig("inner", width=event.width)
+            print("\n$sb", self._canvas.yview())
+            if (self._canvas.yview())[1] == 1:
+                self._vertical_bar.grid_forget()
+            else:
+                self._vertical_bar.grid(row=0, column=1, sticky='ns')
         if self.resize_height:
             self._canvas.itemconfig("inner", height=event.height)
 
@@ -1574,17 +1655,19 @@ class Tk_CaseViewer(tk.Frame):
                 self.sub_frame_state.set(False)
 
         def right_click_delete(self, event=None):
+            # Remove Frames
+            self.master_frame.destroy()
+            self.sub_frame.destroy()
+            self.destroy()
             # Remove DB records
             bcamp_api.drop_sr(self.key_value)
             # Next remove *downloads* folder
             try:
-                os.removedirs((self.RPATH + "\\downloads\\" + self.key_value))
+                #os.removedirs((self.RPATH + "\\downloads\\" + self.key_value))
+                shutil.rmtree((self.RPATH + "\\downloads\\" + self.key_value))
             except:
                 print("ERROR - Unable to delete *downloads* dir for " + self.key_value)
-            # Last, remove Frames
-            #self.master_frame.destroy()
-            #self.sub_frame.destroy()
-            self.destroy()
+
 
         def right_click_save_all_notes(self, event=None):
             # Define result string
@@ -1989,7 +2072,6 @@ class Tk_EditCaseMenu(tk.Toplevel):
             #'customs_list': customs_list,
         }
 
-        # Updating "import_item" -> Gui.import_handler(new_import_dict)
         bcamp_api.update_case_record(self.key_value, new_sr_dict)
         # Refresh Caseview Tiles.
         Gui.refresh_CaseView.value = self.key_value
@@ -2835,11 +2917,11 @@ class Tk_ImportMenu(tk.Frame):
             print("Tk_ImportMenu failed to import Clipboard contents.")
 
     def config_widgets(self):
-        bg_0 = "#111111"
-        bg_0 = "#333333"
+        bg_2 = "#111111"
+        bg_1 = "#333333"
         bg_0 = "#202020"
         fg_0 = "#FFFFFF"
-        grn_0 = "#badc58"
+        self.grn_0 = "#badc58"
         def_font = tk_font.Font(
             family="Consolas", size=11, weight="normal", slant="roman")
         bold_font = tk_font.Font(
@@ -2853,8 +2935,12 @@ class Tk_ImportMenu(tk.Frame):
         self.config(
             background=bg_0
         )
-        self.label_sr = tk.Label(
+        self.sr_entry_frame = tk.Frame(
             self,
+            background=bg_0
+        )
+        self.label_sr = tk.Label(
+            self.sr_entry_frame,
             text="SR NUMBER ⮞",
             relief='flat',
             background=bg_0,
@@ -2862,13 +2948,25 @@ class Tk_ImportMenu(tk.Frame):
             font=bold_font
         )
         self.entry_sr = tk.Entry(
-            self,
-            width=18,
+            self.sr_entry_frame,
+            width=24,
             relief='flat',
             font=bold_font,
             validate="key",
-            validatecommand=vcmd
+            validatecommand=vcmd,
+            justify='center'
         )
+        self.entry_sr_clear = tk.Button(
+            self.sr_entry_frame,
+            text="Clear",
+            relief='flat',
+            font=bold_font,
+            background=bg_1,
+            foreground=fg_0,
+            command=self.clear_sr_entry
+        )
+
+
         self.label_favorite = tk.Label(
             self,
             text="Important?",
@@ -2902,7 +3000,7 @@ class Tk_ImportMenu(tk.Frame):
         self.btn_browse = tk.Button(
             self.bottom_bar_frame,
             text="Bulk Import",
-            command=self.direct_import_broswer,
+            command=self.open_bulk_importer,
             relief='flat',
             font=bold_font
         )
@@ -2953,16 +3051,19 @@ class Tk_ImportMenu(tk.Frame):
             background=bg_0,
             relief='flat'
         )
-        self.label_tags = tk.Label(
+
+
+        self.label_account = tk.Label(
             self.ext_opts_frame,
-            text="Tag(s) :",
+            text="Account :",
             background=bg_0,
             foreground=fg_0,
             font=def_font
         )
-        self.entry_tags = ttk.Entry(
+        self.combox_account = CustomTk_autoEntry(
             self.ext_opts_frame,
             width=29,
+            background=bg_0,
             font=def_font
         )
         self.label_product = tk.Label(
@@ -2978,19 +3079,6 @@ class Tk_ImportMenu(tk.Frame):
             background=bg_0,
             font=def_font
         )
-        self.label_account = tk.Label(
-            self.ext_opts_frame,
-            text="Account :",
-            background=bg_0,
-            foreground=fg_0,
-            font=def_font
-        )
-        self.combox_account = CustomTk_autoEntry(
-            self.ext_opts_frame,
-            width=29,
-            background=bg_0,
-            font=def_font
-        )
         self.label_bug = tk.Label(
             self.ext_opts_frame,
             text="JIRA/Bug ID :",
@@ -2999,6 +3087,18 @@ class Tk_ImportMenu(tk.Frame):
             font=def_font
         )
         self.entry_bug = ttk.Entry(
+            self.ext_opts_frame,
+            width=29,
+            font=def_font
+        )
+        self.label_tags = tk.Label(
+            self.ext_opts_frame,
+            text="Tag(s) :",
+            background=bg_0,
+            foreground=fg_0,
+            font=def_font
+        )
+        self.entry_tags = ttk.Entry(
             self.ext_opts_frame,
             width=29,
             font=def_font
@@ -3040,6 +3140,13 @@ class Tk_ImportMenu(tk.Frame):
             font=def_font
         )
 
+        # Populating Autofill record
+        # Setting auto-complete list
+        account_autofill = bcamp_api.query_cases_distinct('account')
+        product_autofill = bcamp_api.query_cases_distinct('product')
+        self.combox_account.set_completion_list(tuple(account_autofill))
+        self.combox_product.set_completion_list(tuple(product_autofill))
+
     def config_grid(self):
         '''
         Defines Grid layout for Tk.Widgets defined in init.
@@ -3050,16 +3157,24 @@ class Tk_ImportMenu(tk.Frame):
         self.grid_columnconfigure(1, weight=1)
 
         # Main Widgets
-        self.label_sr.grid(
-            row=1, column=0, padx=4, pady=4, sticky="e", ipady=10)
-        self.entry_sr.grid(
-            row=1, column=1, padx=4, pady=2, sticky="w")
+        self.sr_entry_frame.grid(
+            row=1, column=0, sticky="nsew"
+        )
         self.ext_opts_frame.grid(
             row=2, column=0, columnspan=2, padx=4, pady=(20,0), sticky="nsew")
         self.bulk_hint.grid(
             row=3, column=0, columnspan=2, padx=4, pady=(20,0), sticky="ew")
         self.bottom_bar_frame.grid(
             row=4, column=0, columnspan=2, padx=4, pady=4, sticky="sew")
+
+        # Sr Entry Frame contents
+        self.sr_entry_frame.columnconfigure(0, weight=1)
+        self.label_sr.grid(
+            row=0, column=0, padx=5, pady=4, sticky="e", ipady=10)
+        self.entry_sr.grid(
+            row=0, column=1, padx=5, pady=2, sticky="w")
+        #self.entry_sr_clear.grid(
+        #    row=0, column=2, padx=8, pady=2, sticky="w")    
 
         # ext_opts_frame contents
         self.ext_opts_frame.columnconfigure(0, weight=1)
@@ -3111,15 +3226,10 @@ class Tk_ImportMenu(tk.Frame):
             self.notes_frame.grid()
             self.notes_frame_state = "on"
 
-    def direct_import_broswer(self):
-        filename = filedialog.askopenfilename(
-            initialdir="/",
-            title="Select a File",
-            filetypes=(("Text files",
-                        "*.txt*"),
-                        ("all files",
-                        "*.*")))
-        self.direct_import = True
+    def open_bulk_importer(self):
+        bcamp_api.bulk_importer(Gui.import_item)
+        # Closing window...
+        self.destroy()
 
     def start_import(self, event=None):
         # Creating "import_item" Dictionary
@@ -3142,6 +3252,14 @@ class Tk_ImportMenu(tk.Frame):
         del self.Tk_WorkspaceTabs.open_tabs[pop_index]
         # Closing window...
         self.destroy()
+
+    def clear_sr_entry(self):
+        '''
+        Removes the value stored in the SR entry field.
+        '''
+        print("!")
+        self.entry_sr.delete(0, 'end')
+
 
     # Advanced Options "Get" methods
     def get_tags(self):
@@ -3260,20 +3378,31 @@ class Tk_ImportMenu(tk.Frame):
             The expected SR length.
             '''
             curStr = self.entry_sr.get()
-            if len(curStr) == 13: 
+            if len(curStr) == 12: 
                 self.btn_start["state"] = "normal"
+                self.btn_start["background"] = self.grn_0
+            else:
+                self.btn_start["state"] = "disabled"
+                self.btn_start["background"] = "#F0F0F0"
+        
+
+        print(i)
+
 
         #Disallow anything but Number OR "-" char on index 2?
-        if S.isnumeric() or S == "-" and i == "1":
-            print("we good")
+        if int(i) > 12:
+            return False
+        elif S.isnumeric() or S == "-" and i == "1":
             enable_importBtn()
             return True
-        elif len(P) == 13:
+        elif len(P) == 12:
             print("Got a paste of an SR number.")
             enable_importBtn()
             return True
+        elif S == self.entry_sr.get():
+            return True
+
         else:
-            print(".")
             return False
         
 
@@ -3743,7 +3872,9 @@ class Tk_DefaultTab(ttk.Frame):
             font=self.def_font,
             background="#0F1117",
             foreground="#717479",
-            cursor="plus"
+            cursor="plus",
+            activebackground="#0F1117",
+            activeforeground="#717479",
         )
 
         self.master.rowconfigure(0, weight=1)
@@ -3760,80 +3891,51 @@ class Tk_DefaultTab(ttk.Frame):
         self.Tk_WorkspaceTabs.import_tab()
 
     def direct_import_broswer(self, event=None):
-        # Prompt User for file to import
-        filename = filedialog.askopenfilename(
-            initialdir="/",
-            title="Basecamp Bulk Importer - Select a file to import!",
-            filetypes=[("Text files",
-                        "*.txt*")])
-        # Open resulting file
-        print("IMPORT FILE:", filename)
-        ifile = open(filename, 'r')
-        ifile_content = ifile.readlines()
-        # Read lines of "ifile" and import one, by one.
-        for line in ifile_content:
-            print("-->", line)
+        # Passing Args to API to do the actually work.
+        bcamp_api.bulk_importor( Gui.import_item)
 
-            # Count number of (', ') in line
-            importIndexCnt = line.count(', ')
-            print("\n$importIndex :", importIndexCnt)
 
-            if importIndexCnt == 0:
-                # For simple imports, the importIndexCnt will be 0
-                #       **Only using an SR Number**
-                self.simple_bulk_import(line)
-            else:
-                # This will be a complex/complete import.
-                # Splitting string to parse for account, and product vals.
-                split_line = line.split(', ')
-                # Order -> Sr_Num, Product, Account 
-                self.start_bulk_import(split_line[0], split_line[1], split_line[2])
 
-    def start_bulk_import(self, sr_num, product, account):
-        # Creating "import_item" Dictionary
-        new_import_dict = {
-            # Required Dict Vals
-            'sr_number': sr_num,
-            #'remote_path': None,  # Set in Finalize...
-            #'local_path': None, # Set in Finalize...
-            'pinned': 0, # Default = !Pinned
-            # Import/Calculated Values
-            'product': product.strip(),
-            'account': account.strip(),
-            #'import_time': None,
-            #'last_ran_time': None,
-            # Untouched Dict Vals for bulk
-            'bug_id': None,
-            'workspace': None,
-            'notes': None,
-            'tags_list': None,
-            'customs_list': None
-        }
-        # Updating "import_item" -> Gui.import_handler(new_import_dict)
-        Gui.import_item.value = new_import_dict
+    #    # Prompt User for file to import
+    #    filename = filedialog.askopenfilename(
+    #        initialdir="/",
+    #        title="Basecamp Bulk Importer - Select a file to import!",
+    #        filetypes=[("Text files",
+    #                    "*.txt*")])
+    #    # Open resulting file
+    #    print("IMPORT FILE:", filename)
+    #    ifile = open(filename, 'r')
+    #    ifile_content = ifile.readlines()
+    #    # Read lines of "ifile" and import one, by one.
+    #    for line in ifile_content:
+    #        print("-->", line)
+    #        # Splitting string to parse for account, and product vals.
+    #        split_line = line.split(', ')
+    #        # Order -> Sr_Num, Product, Account S
+    #        self.start_bulk_import(split_line[0], split_line[1], split_line[2])
 
-    def simple_bulk_import(self, sr_num):
-        # Creating "import_item" Dictionary
-        new_import_dict = {
-            # Required Dict Vals
-            'sr_number': sr_num,
-            #'remote_path': None,  # Set in Finalize...
-            #'local_path': None, # Set in Finalize...
-            'pinned': 0, # Default = !Pinned
-            # Import/Calculated Values
-            'product': None,
-            'account': None,
-            #'import_time': None,
-            #'last_ran_time': None,
-            # Untouched Dict Vals for bulk
-            'bug_id': None,
-            'workspace': None,
-            'notes': None,
-            'tags_list': None,
-            'customs_list': None
-        }
-        # Updating "import_item" -> Gui.import_handler(new_import_dict)
-        Gui.import_item.value = new_import_dict
+    #def start_bulk_import(self, sr_num, product, account):
+    #    # Creating "import_item" Dictionary
+    #    new_import_dict = {
+    #        # Required Dict Vals
+    #        'sr_number': sr_num,
+    #        #'remote_path': None,  # Set in Finalize...
+    #        #'local_path': None, # Set in Finalize...
+    #        'pinned': 0, # Default = !Pinned
+    #        # Import/Calculated Values
+    #        'product': product.strip(),
+    #        'account': account.strip(),
+    #        #'import_time': None,
+    #        #'last_ran_time': None,
+    #        # Untouched Dict Vals for bulk
+    #        'bug_id': None,
+    #        'workspace': None,
+    #        'notes': None,
+    #        'tags_list': None,
+    #        'customs_list': None
+    #    }
+    #    # Updating "import_item" -> Gui.import_handler(new_import_dict)
+    #    Gui.import_item.value = new_import_dict
 
     def bulk_cursor(self, event=None):
         self.btn_big['cursor'] = 'top_side'
