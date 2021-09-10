@@ -28,7 +28,7 @@ import subprocess
 from tkinter import filedialog
 
 # GLOBAL BCAMP VERSION STRING
-BCAMP_VERSION = "DEV-Aug26"
+BCAMP_VERSION = "DEV-Sep10"
 # ROOT PATH CONSTANT FOR INSTALL DIR.
 BCAMP_ROOTPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
 
@@ -1944,7 +1944,22 @@ def bulk_importer(import_item):
         # Order -> Sr_Num, Product, Account S
         start_bulk_import(import_item, split_line[0], split_line[1], split_line[2])
 
-    
+def destroy_sr(key_val):
+    '''
+    Deletes all tables, UI elements and files stored locally for a target SR 
+    defined by key_val.
+    '''
+    global BCAMP_ROOTPATH
+
+    print("BCAMP-API : Destorying all content for [", key_val, "]")
+    # Remove items from DB
+    drop_sr(key_val)
+    # Removing Downloaded files.
+    try:
+        #os.removedirs((self.RPATH + "\\downloads\\" + self.key_value))
+        shutil.rmtree((BCAMP_ROOTPATH + "\\downloads\\" + key_val))
+    except:
+        print("ERROR - Unable to delete *downloads* dir for " + key_val)
 
 def get_snapshot(path):
     '''
@@ -2134,3 +2149,42 @@ def check_newfiles(key_val):
             return False
     except TypeError: #Seen on new imports where value is None
         return False
+
+def set_devMode(enable_bool):
+    '''
+    If a user enabled Dev mode through the secret-sauce in the UI, this method
+    is called to update the DB with the right parameters, and generates the
+    local '_testing_nas' remote dir
+    '''
+    if enable_bool == False:
+        #Updating DB config var for 'dev_mode' and 'remote_root'
+        prod_nas = r'\\dnvcorpvf2.corp.nai.org\nfs_dnvspr'
+        update_config('dev_mode', "False")
+        update_config('remote_root', prod_nas)
+        print("devMode> DISABLED! Setting remote server to production.")
+
+    elif enable_bool == True:
+        # Creating local "remote" dir to source imports. This removes the 
+        # requirement to be connected to the enterprise enviorment because we
+        # replicate the remote server.
+        global BCAMP_ROOTPATH
+        dev_nas = BCAMP_ROOTPATH + "\\_dev_nas"
+        sample_sr = dev_nas + "\\4-11111111111"
+
+        if not os.access(dev_nas, os.R_OK):
+            print("devMode> Creating local 'remote' folder titled '_dev_nas'")
+            os.mkdir(dev_nas)
+            print("devMode> '_dev_nas' created in bCamp install location.")
+
+        # Creating sample 'SR' folder as it would be in prod.
+        if not os.access(sample_sr, os.R_OK):
+            print("devMode> Creating sample SR folder titled '4-11111111111")
+            os.mkdir(sample_sr)
+            print("devMode> Sample SR dir created! - be sure to populate it.")
+
+        #Updating DB config var for 'dev_mode' and 'remote_root'
+        update_config('dev_mode', "True")
+        update_config('remote_root', dev_nas)
+        print("devMode> ENABLED! Setting remote server to '\_dev_nas'")
+
+# EOF

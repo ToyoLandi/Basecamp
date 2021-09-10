@@ -1659,14 +1659,8 @@ class Tk_CaseViewer(tk.Frame):
             self.master_frame.destroy()
             self.sub_frame.destroy()
             self.destroy()
-            # Remove DB records
-            bcamp_api.drop_sr(self.key_value)
-            # Next remove *downloads* folder
-            try:
-                #os.removedirs((self.RPATH + "\\downloads\\" + self.key_value))
-                shutil.rmtree((self.RPATH + "\\downloads\\" + self.key_value))
-            except:
-                print("ERROR - Unable to delete *downloads* dir for " + self.key_value)
+            # Destorying SR contents.
+            bcamp_api.destroy_sr(self.key_value)
 
 
         def right_click_save_all_notes(self, event=None):
@@ -2229,13 +2223,23 @@ class Tk_SettingsMenu(tk.Toplevel):
             background='#212121',
             foreground='#f5f5f5'
         )
+        self.parsing_menu = tk.Button(
+            self.base_btn_frame,
+            text="Parsing Rules            ▷",
+            anchor='center',
+            command=self.render_parsing_rules,
+            width=30,
+            relief='flat',
+            background='#212121',
+            foreground='#f5f5f5'
+        )
         self.dev_mode_label = tk.Label(
             self.base_btn_frame,
             textvariable=self.mode_str,
             background="#111111",
             foreground="#525258"
         )
-        self.dev_mode_label.bind('<Quadruple-1>', self.enable_dev_mode)
+        self.dev_mode_label.bind('<Control-Button-3>', self.enable_dev_mode)
 
     def config_grid(self):
         self.rowconfigure(0, weight=1)
@@ -2248,6 +2252,8 @@ class Tk_SettingsMenu(tk.Toplevel):
         self.general_menu.grid(row=0, column=0, padx=1, pady=1, sticky='ew')
         self.automations_menu.grid(
             row=2, column=0, padx=1, pady=1, sticky='ew')
+        self.parsing_menu.grid(
+            row=3, column=0, padx=1, pady=1, sticky='ew')
         self.dev_mode_label.grid(
             row=4, column=0, padx=3, pady=3, sticky="sw")
         # Menu Frame Config
@@ -2266,6 +2272,11 @@ class Tk_SettingsMenu(tk.Toplevel):
             child.destroy()
         self.Tk_Automations(self.base_menu_frame)
 
+    def render_parsing_rules(self):
+        for child in self.base_menu_frame.winfo_children():
+            child.destroy()
+        self.Tk_ParsingRules(self.base_menu_frame)
+
     def get_mode(self):
         if bcamp_api.get_config('dev_mode') == "True":
             self.mode_str.set("DevMode 😈")
@@ -2273,8 +2284,17 @@ class Tk_SettingsMenu(tk.Toplevel):
             self.mode_str.set("Howdy, Engineer 😎")
 
     def enable_dev_mode(self, event=None):
-        bcamp_api.update_config('dev_mode', "True")
-        self.mode_str.set("DevMode 😈")
+        '''
+        Toggle method to enable or disable dev mode. 
+        '''
+        if bcamp_api.get_config('dev_mode') == "True":
+            bcamp_api.set_devMode(False)
+            self.mode_str.set("Howdy, Engineer 😎")
+
+        elif bcamp_api.get_config('dev_mode') == "False":
+            # Configuring extra params for DevMode - See API.
+            bcamp_api.set_devMode(True)
+            self.mode_str.set("DevMode 😈")
 
 
     class Tk_DefaultMsg(tk.Frame):
@@ -2308,7 +2328,7 @@ class Tk_SettingsMenu(tk.Toplevel):
                                 pady=10, sticky='nsew')
 
 
-    class Tk_General(tk.Frame):
+    class Tk_General(tk.Frame): 
         '''
         Paths Setting Menu Frame for Remote and Local Paths
         '''
@@ -2554,10 +2574,11 @@ class Tk_SettingsMenu(tk.Toplevel):
         Menu to modify user-defined parsing rules.
         '''
         def __init__(self, master):
-            super().__init__(master=master)
-            self.list_ruleset = []
-            self.keyword_ruleset = []
-            self.regex_ruleset = []
+            super().__init__()
+            self.master = master
+            self.line_sub_state = "off"
+            self.keyword_sub_state = "off"
+            self.regex_sub_state = "off"
 
             # Tk Methods
             self.config_widgets()
@@ -2565,23 +2586,59 @@ class Tk_SettingsMenu(tk.Toplevel):
 
         def config_widgets(self):
             # [Line Parser]
-            self.line_frame = tk.Frame(
-                self,
-                background="red"
-            )
-            self.line_dropdown = tk.Button(
-                self.line_frame,
-                text="V    Line Parsing Rules     V"
-            )
-            self.line_subframe = tk.Frame(
-                self.line_frame,
+            #self.line_frame = tk.Frame(
+            #    self.master,
+            #    background="orange"
+            #)
+            #self.line_dropdown = tk.Button(
+            #    self.line_frame,
+            #    text="    Line Parsing Rules     ",
+            #    command=self.expand_line_rules
+            #)
+            #self.line_subframe = tk.Frame(
+            #    self.line_frame,
+            #    background="yellow"
+            #)
+
+            # [Active Rules Table]
+            self.ar_frame = tk.Frame(
+                self.master,
                 background="yellow"
+            )
+            self.ar_label = tk.Label(
+                self.master,
+                text="Active Parsing Rules"
+            )
+            self.ar_tree = ttk.Treeview(
+                self.ar_frame,
+                columns=('Type', 'Return', 'Target File', 'Rule Definition'),
+                selectmode='browse',
+            )
+            self.ar_tree_ysb = ttk.Scrollbar(
+                self.ar_frame,
+                orient='vertical',
+                command=self.ar_tree.yview
+            )
+            self.ar_tree.configure(yscrollcommand=self.ar_tree_ysb)
+
+            self.new_rule_btn = tk.Button(
+                self.ar_frame,
+                text="New Rule +"
+            )
+            self.import_rules_btn = tk.Button(
+                self.ar_frame,
+                text="Import Ruleset"
+            )
+            self.export_rules_btn = tk.Button(
+                self.ar_frame,
+                text="Export Ruleset"
             )
 
             # [BottomBar]
             self.bbar_frame = tk.Frame(
-                self,
-                background="#303030",
+                self.master,
+                background="yellow",
+
             )
             self.spacer = tk.Label(
                 self.bbar_frame,
@@ -2604,7 +2661,22 @@ class Tk_SettingsMenu(tk.Toplevel):
 
         def config_grid(self):
             # [Line Parser Frame]
-            self.line_frame.grid(row=1, column=0, sticky="nsew")
+            ## self.line_frame.grid(row=1, column=0, sticky="nsew")
+            ## self.line_frame.columnconfigure(0, weight=1)
+            ## self.line_frame.rowconfigure(0, weight=1)
+            ## self.line_dropdown.grid(row=0, column=0, sticky="ew")
+            ## self.line_subframe.grid(row=1, column=0, sticky="ew")
+            ## self.line_subframe.grid_forget()
+
+            # [Active Rules Frame]
+            ## self.ar_frame 
+            ## self.ar_label
+            ## self.ar_tree
+            ## self.ar_tree_ysb
+            ## self.new_rule_btn
+            ## self.new_rule_btn
+            ## self.import_rules_btn
+            ## self.import_rules_btn
 
             # [BottomBar]
             self.bbar_frame.grid(
@@ -2616,12 +2688,10 @@ class Tk_SettingsMenu(tk.Toplevel):
             self.save_bar.columnconfigure(0, weight=1)
             self.save_btn.grid(row=1, column=0, padx=1, pady=(20,0), sticky='e')
 
-
         def get_rulesets():
             '''
-            Queries the DB for the parsing rules, and stores the results into
-            their respective ruleset list. These will be iterated through 
-            later.
+            Queries the DB for the parsing rules, and populates the active
+            rules tree.
             '''
             pass
 
@@ -2631,6 +2701,18 @@ class Tk_SettingsMenu(tk.Toplevel):
             '''
             pass
 
+        def expand_line_rules(self):
+            '''
+            Reveals the Line Rules Dropdown Menu.
+            '''
+            if self.line_sub_state == "off":
+                # Enable dropdown. 
+                self.line_subframe.grid()
+                self.line_sub_state = "on"
+            elif self.line_sub_state == "on":
+                # disable/remove dropdown. 
+                self.line_subframe.grid_remove()
+                self.line_sub_state = "off"
 
         class Rule_Template(tk.Frame):
             '''
@@ -2642,6 +2724,20 @@ class Tk_SettingsMenu(tk.Toplevel):
                 id_label = tk.Label(
                     self
                 )
+                return_spinbox = tk.Spinbox(
+                    self,
+                    values=('all', 'first'),
+                )
+                target_entry = tk.Entry(
+                    self,
+                    width=40
+                )
+                rule_entry = tk.Text(
+                    self,
+                    width=40,
+                    
+                )
+        
 
     class Tk_Automations(tk.Frame):
         '''
