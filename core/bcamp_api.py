@@ -21,14 +21,16 @@ import logging
 import sqlite3
 import pathlib
 import datetime
+import ctypes
 import importlib
 import threading
+import webbrowser
 import py_compile
 import subprocess
 from tkinter import filedialog
 
 # GLOBAL BCAMP VERSION STRING
-BCAMP_VERSION = "DEV-Sep10"
+BCAMP_VERSION = "DEV-Sep12"
 # ROOT PATH CONSTANT FOR INSTALL DIR.
 BCAMP_ROOTPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
 
@@ -1329,6 +1331,7 @@ class FileOpsQueue:
                 copied += n
                 callback(copied)
 
+
 '''
 [Automations]
 
@@ -1341,6 +1344,8 @@ filebrowser. Some examples include "ATD-Unpack" that decrypts "SupportBundle"
 log bundles, into a readable file for an engineer to review. A process that
 manually takes 5+ mins of file operations and terminal commands.
 '''
+
+
 class Automations:
     '''
     Main class to interact with "Automations" stored in the...
@@ -1590,6 +1595,7 @@ configuration of keyword, line, or regex rules for a target file. Automating
 some of the effort for common data such as versioning.
 '''
 
+
 class SimpleParser():
     '''
     This class is initalized *EVERYTIME* a file-record is refreshed for a 
@@ -1636,20 +1642,6 @@ class SimpleParser():
         '''
         allfiles = updated_file_record
         ruleset = dump_parser() # Python Dict of rules saved DB.
-
-        # DEBUG/ ADDING VALUES TO RULESET MANUALLY
-        test_keyword = {
-            '1': {
-                'type': 'keyword',
-                'return': 'all',
-                'target': '\\opt\\amas\\version.txt',
-                'rule': 'version'
-            }
-        }
-
-        ruleset.update(test_keyword)
-        # /DEBUG
-
 
         target_file_lst = [] # Simplified list of target files to search for.
         found_targets = [] # Resulting 'full path' of found files.
@@ -1700,11 +1692,11 @@ class SimpleParser():
 
         # Iterating through final 'res_item_set' to send to the defined parser.
         for item in res_item_set:
-            if item['type'] == "line":
+            if item['type'] == "LINE":
                 line_results.append(self.line_parser(item))
-            if item['type'] == "keyword":
+            if item['type'] == "KEYWORD":
                 keyword_results.append(self.keyword_parser(item))
-            if item['type'] == "regex":
+            if item['type'] == "REGEX":
                 regex_results.append(self.regex_parser(item))
 
 
@@ -1714,7 +1706,6 @@ class SimpleParser():
         # Now to update the Filebrowser tree to show the resulting data!
         self.filebrowser.refresh_file_record('local', False)
         print("SimpleParser: Jobs done! Exiting.")
-
 
     def line_parser(self, item_params):
         '''
@@ -1761,7 +1752,7 @@ class SimpleParser():
                     temp_results.append((line_num, line_content))
 
             # Result formated determined by 'r_return' value
-            if r_return == 'all':
+            if r_return == 'ALL':
                 parser_result = {
                     'id': item_params['id'],
                     'rule': item_params['rule'],
@@ -1769,7 +1760,7 @@ class SimpleParser():
                     'result': temp_results
                 }
                 return parser_result
-            elif r_return == 'first':
+            elif r_return == 'FIRST':
                 parser_result = {
                     'id': item_params['id'],
                     'rule': item_params['rule'],
@@ -1777,7 +1768,6 @@ class SimpleParser():
                     'result': temp_results[0]
                 }
                 return parser_result                
-
 
     def regex_parser(self, item_params):
         '''
@@ -1792,6 +1782,10 @@ class SimpleParser():
         within the 'downloads/*key_value*' folder for the scanned SR.
         '''
         # Generating 'bCampParser.results' file.
+        print("\n\n\n")
+        print("$line_dict", line_dict)
+        print("$keyword_dict", keyword_dict)
+        
         global BCAMP_ROOTPATH
         result_file_path = (BCAMP_ROOTPATH 
             + "\\downloads\\" 
@@ -1892,6 +1886,203 @@ def dump_parser():
     # Returning finalized conv_ruleset Dict.
     return conv_ruleset
 
+def create_parser_rule(rule_dict):
+    '''
+    DB query that takes values from the UI, and populates a new row in the
+    'bcamp_parser' table
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("""INSERT INTO bcamp_parser(
+                id,
+                type,
+                return,
+                target,
+                rule) 
+                VALUES (?,?,?,?,?);""",
+                (
+                rule_dict['id'], 
+                rule_dict['type'],
+                rule_dict['return'],
+                rule_dict['target'],
+                rule_dict['rule']
+                )
+            )
+    dbcon.commit() # Save Changes
+    dbcon.close()
+
+    print("SQLite3: *bcamp_parser* updated!")
+
+def update_parser_rule(rule_id, rule_dict):
+    '''
+    Updates all columns for a specific rule_id based on what was configured
+    within the UI by the user.
+    '''
+    print("|\n\n:D|", rule_id, rule_dict)
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute('''UPDATE bcamp_parser SET
+        type = (?),
+        return = (?),
+        target = (?),
+        rule = (?) WHERE id = (?)''',
+        (rule_dict['type'],
+        rule_dict['return'],
+        rule_dict['target'],
+        rule_dict['rule'],
+        rule_id)
+        )
+    dbcon.commit() # save changes
+    dbcon.close()
+    print("SQLite3: *bcamp_parser*:", rule_id, "updated with new values.")
+
+
+
+'''
+[Note Output Methods]
+
+These methods define the format for the 'allnotes_X' and 'casenotes_X' text
+files generated when a user wants to export their notes from the UI.
+'''
+def gen_casenotes(key_val, outfile):
+    '''
+    Defines the format of the CaseNotes within the output file.
+    '''
+    #Case Notes Stack
+    outfile.write("[Case Notes]")
+    outfile.write("\n\n")
+    # Getting saved case notes in DB.
+    casenotes_val = query_sr(key_val, 'notes')
+    # Writing to outfile
+    if casenotes_val != None:
+        casenotes_linesplit = casenotes_val.splitlines()
+        for newline in casenotes_linesplit:
+            outfile.write(newline)
+    else:
+        outfile.write("\tn/a")
+        outfile.write("\n")
+
+def gen_filenotes(key_val, outfile):
+    '''
+    Defines the format of the FileNotes within the output file.
+    '''
+ #File Notes Stack
+    # Store local_path for later.
+    local_path = query_sr(key_val, 'local_path')
+
+    outfile.write("\n")    
+    outfile.write("\n")    
+    outfile.write("[File Notes]")
+    outfile.write("\n")    
+    # Get a list of tuples containing all file details, with "notes"
+    filenotes_dump = query_dump_notes(key_val, "*")
+    # Format ouput for each file.
+    for file_details in filenotes_dump:
+        fname = file_details[0]
+        fmod_time = datetime.datetime.fromtimestamp(float(file_details[5])).strftime('%H:%M:%S %m/%d/%Y') #TODO FORMAT
+        fpath = file_details[2]
+        fnotes = file_details[9]
+
+        #Check if 'fname' contains local path, if so replace it.
+        if local_path in fname:
+            fname = fname.replace((local_path + "\\"), 'Local.')
+
+
+        outfile.write("> " + fname)
+        outfile.write("\n")                
+        outfile.write("| Last Modified (24 Hour): " + fmod_time)
+        outfile.write("\n")
+        outfile.write("| Path: " + fpath)
+        outfile.write("\n")
+        outfile.write("| Notes: ")
+        outfile.write("\n")
+
+        fnotes_linesplit = fnotes.splitlines()
+        for newline in fnotes_linesplit:
+            outfile.write(newline + "\n")
+        outfile.write("\n\n\n")
+
+def create_casenotes_file(key_val):
+    '''
+    Queries the DB and returns the Casenotes for the target 'key_val'
+    '''
+    # Define Outfile by prompting user
+    save_file = filedialog.asksaveasfile(
+        initialdir="/",
+        title="Basecamp - CaseNotes Exporter",
+        initialfile=("casenotes_" + key_val),
+        defaultextension=".txt"
+    )
+
+    # Writing CaseNotes to the outfile.
+    gen_casenotes(key_val, save_file)
+
+    # Saving and closing outfile!
+    save_file.close()
+
+def create_allnotes_file(key_val):
+    '''
+    Generates the allnotes_X file containing Case Notes and all filenotes
+    in a human-readable format.
+    '''
+    # Define result string
+    save_file = filedialog.asksaveasfile(
+        initialdir="/",
+        title="Basecamp - AllNotes Exporter",
+        initialfile=("allnotes_" + key_val),
+        defaultextension=".txt"
+        )
+
+    # Writing CaseNotes to the outfile.
+    gen_casenotes(key_val, save_file)
+
+    # Writing FileNotes to the outfile.
+    gen_filenotes(key_val, save_file)
+ 
+    # Saving and closing outfile!
+    save_file.close()
+
+
+'''
+[Windows Clipboard Methods]
+
+Best-effort to interact with the windows clipboard using ONLY stdlib. 
+'''
+def to_win_clipboard(text):
+    '''
+    Saves "text" to the windows clipboard Safely.
+    Call as an Thread to prevent UI stutter. Example...
+        threading.Thread(target=bcamp_api.to_win_clipboard,
+            args=[self.sr_id]).start()
+    '''
+    # Converting string to bytes for subprocess call.
+    byte_form = text.encode('utf-8')
+    subprocess.Popen(['clip'], stdin=subprocess.PIPE).communicate(byte_form)
+    print(text, " copied to Windows Clipboard")
+
+def from_win_clipboard_str():
+    CF_TEXT = 1
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    user32 = ctypes.windll.user32
+    user32.GetClipboardData.restype = ctypes.c_void_p
+
+    user32.OpenClipboard(0)
+    try:
+        if user32.IsClipboardFormatAvailable(CF_TEXT):
+            data = user32.GetClipboardData(CF_TEXT)
+            data_locked = kernel32.GlobalLock(data)
+            text = ctypes.c_char_p(data_locked)
+            value = text.value
+            kernel32.GlobalUnlock(data_locked)
+            de_value = value.decode('ascii')
+            de_value = de_value.replace('\r', ' ')
+            de_value = de_value.replace('\n', ' ')
+            return de_value
+    finally:
+        user32.CloseClipboard()
+
 
 '''
 [General API Methods]
@@ -1960,6 +2151,20 @@ def destroy_sr(key_val):
         shutil.rmtree((BCAMP_ROOTPATH + "\\downloads\\" + key_val))
     except:
         print("ERROR - Unable to delete *downloads* dir for " + key_val)
+
+def search_w_google(sel_str):
+    '''
+    Launches a webbrowser window and uses google query formatting to search
+    the internet for the selection highlighted in a text widget
+    '''
+    base_url = "https://www.google.com/search?q="
+    search_query = base_url + sel_str
+    webbrowser.open(search_query)
+
+def search_w_jira(sel_str):
+    base_url = "https://jira-lvs.prod.mcafee.com/secure/QuickSearch.jspa?searchString="
+    search_query = base_url + sel_str
+    webbrowser.open(search_query)
 
 def get_snapshot(path):
     '''
@@ -2071,18 +2276,6 @@ def calc_md5(file_path):
         for chunk in iter(lambda: f.read(4096), b""):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
-
-def to_win_clipboard(text):
-    '''
-    Saves "text" to the windows clipboard Safely.
-    Call as an Thread to prevent UI stutter. Example...
-        threading.Thread(target=bcamp_api.to_win_clipboard,
-            args=[self.sr_id]).start()
-    '''
-    # Converting string to bytes for subprocess call.
-    byte_form = text.encode('utf-8')
-    subprocess.Popen(['clip'], stdin=subprocess.PIPE).communicate(byte_form)
-    print(text, " copied to Windows Clipboard")
 
 def create_mainlog():
     RPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]

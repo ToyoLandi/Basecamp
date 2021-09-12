@@ -958,13 +958,431 @@ class CustomTk_ScrolledFrame(tk.Frame):
         # resize inner frame to canvas size
         if self.resize_width:
             self._canvas.itemconfig("inner", width=event.width)
-            print("\n$sb", self._canvas.yview())
             if (self._canvas.yview())[1] == 1:
                 self._vertical_bar.grid_forget()
             else:
                 self._vertical_bar.grid(row=0, column=1, sticky='ns')
         if self.resize_height:
             self._canvas.itemconfig("inner", height=event.height)
+
+
+class CustomTk_BaseTextEditor(tk.Frame):
+    '''
+    This class defines the foundation for the Text Entry widget, with extra 
+    features implemented such as Search, Multiline Tab, and Shortcuts.
+
+    This is used as the base for "LogViewer", "CaseNotes", and "FileNotes"
+    widgets used by bCamp
+    '''
+
+    def __init__(self, master, key_value, root_path, case_frame):
+        super().__init__(master=master)
+        #self.master = master
+        self.key_value = key_value
+        self.show_notes_intvar = tk.IntVar()
+        self.wordwrap_intvar = tk.IntVar() 
+        self.show_search_intvar = tk.IntVar() 
+        self.show_ysb_intvar = tk.IntVar()
+        self.show_notes_intvar.set(0) # Default: start notes pane.
+        self.wordwrap_intvar.set(1) # Default: Enable Wrap
+        self.show_search_intvar.set(0) # Default: Hidden
+        self.selected_file = ""
+        self.title = tk.StringVar()
+        self.title.set("*TESTING BASETEXT*")
+        self.case_frame = case_frame
+        # Removing auto-render when selecting file.
+        #self.case_frame.fb_cur_sel.register_callback(self.open_selected_file)
+        self.RPATH = root_path
+
+        # Setting Fonts for text_box.
+        self.def_font = tk_font.Font(
+            family="Consolas", size=10, weight="normal", slant="roman")
+        self.text_font = tk_font.Font(
+            family="Consolas", size=12, weight="normal", slant="roman")
+        
+        #TK Methods
+        self.config_widgets()
+        self.config_bindings()
+        self.config_grid()
+
+    def config_widgets(self):
+        self.notepad_top_frame = tk.Frame(
+            self,
+            background='#404b4d',
+        )
+        self.search_button = tk.Button(
+            self.notepad_top_frame,
+            background='#404b4d',
+            foreground="#777777",
+            relief="flat",
+            text='⌕',
+            command=self.toggle_search_bar
+        )
+        self.title_label = tk.Label(
+            self.notepad_top_frame,
+            textvariable=self.title,
+            background='#404b4d',
+            foreground="#888888",
+            relief="flat",
+            anchor="center",
+        )
+
+        self.options_button = tk.Button(
+            self.notepad_top_frame,
+            background='#404b4d',
+            foreground="#777777",
+            relief="flat",
+            text='☰',
+            command=self.render_options_menu
+        )
+        self.text_pane = tk.PanedWindow(
+            self,
+            orient='vertical',
+            bd=0,
+            sashwidth=3
+        )
+        self.text_box_frame = tk.Frame(
+            self.text_pane
+        )
+        self.text_box = CustomTk_Textbox(
+            self.text_box_frame,
+            background="#1e2629",
+            foreground="#CCCCCC",
+            insertbackground="#ffffff", #Cursor, ugh TK Naming conventions...
+            padx=10,
+            pady=10,
+            wrap='word',
+            undo=True,
+            font=self.text_font,
+            relief='flat',
+        )
+        self.text_box_xsb = ttk.Scrollbar(
+            self.text_box_frame,
+            orient='horizontal',
+            command=self.text_box.xview
+        )
+        self.text_box_ysb = ttk.Scrollbar(
+            self.text_box_frame,
+            orient='vertical',
+            command=self.text_box.yview
+        )
+        self.text_box.configure(
+            xscrollcommand = self.text_box_xsb.set,
+            yscrollcommand = self.text_box_ysb.set
+        )
+        self.file_notes_frame = tk.Frame(
+            self.text_pane,
+            background="#222222"
+        )
+        # Intialize Tk_LogSearchBar
+        self.search_bar = self.Tk_SearchBar(self.notepad_top_frame, self.key_value, self.text_box)
+
+    def config_grid(self):
+        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.notepad_top_frame.grid(row=0, column=0, sticky='ew')
+
+        # Notepad_top_frame_grid
+        self.notepad_top_frame.rowconfigure(1, weight=1)
+        self.notepad_top_frame.columnconfigure(0, weight=1)
+        self.notepad_top_frame.columnconfigure(1, weight=1)
+        self.title_label.grid(row=0, column=0, columnspan=2, padx=5, pady=3, sticky='ew')
+        self.search_button.grid(row=0, column=2, padx=3, sticky='e')
+        self.options_button.grid(row=0, column=3, padx=3, sticky='e')
+        self.search_bar.grid(row=1, column=0, columnspan=4, sticky='ew')
+        # Hiding SearchBar
+        self.search_bar.grid_remove()
+
+        # Text_box Frame
+        self.text_box_frame.rowconfigure(0, weight=1)
+        self.text_box_frame.columnconfigure(0, weight=1)
+        self.text_box.grid(row=1, column=0, sticky='nsew')
+        self.text_box_xsb.grid(row=2, column=0, sticky='ew')
+        self.text_box_ysb.grid(row=1, column=1, rowspan=2, sticky='ns')
+        # Hiding Scrollbars
+        self.text_box_xsb.grid_remove()
+        self.text_box_ysb.grid_remove()
+
+        # Options Menu
+        self.options_menu = tk.Menu(
+            tearoff="false",
+            background='#404b4d',
+            foreground="#CCCCCC",
+        )
+        self.options_menu.add_command(
+            label="Show/Hide Scrollbar",
+            command=self.toggle_ysb
+        )
+        self.options_menu.add_command(
+            label="Toggle Word-Wrap",
+            command=self.toggle_wordwrap
+        )
+
+    def config_bindings(self):
+        self.text_box.bind("<Tab>", self.tabtext)
+        #self.text_box.bind("<FocusIn>", self.set_focusIn_colors)
+        #self.text_box.bind("<FocusOut>", self.set_focusOut_colors)
+        #self.text_box.bind("<<TextModified>>", self.save_notify)
+        #self.text_box.bind("<Key>", lambda e: "break") # Readonly textbox
+
+    def render_options_menu(self):
+        # Get current edge of Tile...
+        self.notepad_top_frame.update_idletasks()
+        x = self.notepad_top_frame.winfo_rootx()
+        y = self.notepad_top_frame.winfo_rooty()
+        frame_w = self.notepad_top_frame.winfo_width()
+        # Render Menu at edge
+        self.options_menu.post(x + frame_w, y + 0)
+
+    def toggle_ysb(self):
+        if self.show_ysb_intvar.get() == 0: # Hidden *Default Value
+            # Display the FileNotes Pane by "add"ing it.
+            self.show_ysb_intvar.set(1)
+            self.text_box_ysb.grid()
+        elif self.show_ysb_intvar.get() == 1: # Shown
+            # Hidding the FileNotes Pane by "remove"ing it.
+            self.show_ysb_intvar.set(0)
+            self.text_box_ysb.grid_remove()
+
+    def toggle_search_bar(self):
+        if self.show_search_intvar.get() == 0: # Hidden *Default Value
+            # Display the FileNotes Pane by "add"ing it.
+            self.show_search_intvar.set(1)
+            self.search_bar.grid()
+
+        elif self.show_search_intvar.get() == 1: # Shown
+            # Hidding the FileNotes Pane by "remove"ing it.
+            self.show_search_intvar.set(0)
+            self.search_bar.grid_remove()
+
+    def toggle_wordwrap(self):
+        if self.wordwrap_intvar.get() == 0: # Disabled
+            # Update IntVar, and ENABLE wordwrap
+            self.wordwrap_intvar.set(1)
+            self.text_box.configure(wrap=tk.WORD)
+            # Remove Scrollbar
+            self.text_box_xsb.grid_remove()
+
+        elif self.wordwrap_intvar.get() == 1: # Enabled *Default Value
+            # Update IntVar, and DISABLE wordwrap
+            self.wordwrap_intvar.set(0)
+            self.text_box.configure(wrap=tk.NONE)
+            # Show Hori. Scrollbar
+            self.text_box_xsb.grid()
+
+    def legacy_render_search_frame(self):
+        self.update_idletasks()
+        x = self.winfo_rootx()
+        y = self.winfo_rooty()
+        frame_w = self.winfo_width()
+        search_bar = self.Tk_SearchBar(self, self.key_value, self.text_box)
+        search_bar.update_idletasks()
+        w = search_bar.winfo_width()
+        h = search_bar.winfo_height()
+
+        search_bar.place(width=w, height=h)
+
+        #search_bar.place(("%dx%d+%d+%d" % (w, h, x + frame_w - 383, y + 32)))
+
+    def tabtext(self, e):
+        '''
+        When multiple lines are selected, this allows them to be tabbed 
+        together.
+        '''
+        last = self.text_box.index("sel.last linestart")
+        index = self.text_box.index("sel.first linestart")
+        try:
+            while self.text_box.compare(index,"<=", last):
+                self.text_box.insert(index, "        ")
+                index = self.text_box.index("%s + 1 line" % index)
+            return "break"
+        except:
+            pass
+
+
+    class Tk_SearchBar(tk.Frame):
+        '''
+        Default search bar shared by various "Log" focused panes such as 
+        "LogViewer" or "CaseNotes"
+        '''
+        def __init__(self, master, key_value, target_textbox):
+            super().__init__(master=master)
+            self.key_value = key_value
+            self.target_textbox = target_textbox
+            self.shown_match = 0
+            self.total_match = 0
+            self.match_count_stringvar = tk.StringVar()
+            self.match_count_stringvar.set("No results") #Default/empty Val
+
+            self.blk100 = "#EFF1F3"
+            self.blk300 = "#B2B6BC"
+            self.blk400 = "#717479"
+            self.blk500 = "#1E1F21" ##
+            self.blk600 = "#15171C"
+            self.blk700 = "#0F1117"
+            self.blk900 = "#05070F"
+            self.act300 = "#D5A336"
+
+            self.sr_font = tk_font.Font(
+                family="Consolas", size=14, weight="bold", slant="roman")
+            self.mini_font = tk_font.Font(
+                family="Consolas", size=8, weight="bold", slant="italic")
+            self.sub_font = tk_font.Font(
+                family="Consolas", size=10, weight="normal", slant="roman")
+
+            # ONLY for frames. 
+            #self.wm_overrideredirect(True) # Hide windows title_bar
+            ##self.attributes('-topmost', 'true')
+            #self.resizable = False
+            self.config_widgets()
+            self.config_bindings()
+            self.config_grid()
+            # Taking Focus**
+            self.focus_set()
+            self.search_entry.focus_set()
+            # TODO "destroy" TopLevel when focus lost.
+            #self.bind("<FocusOut>", self.on_focus_out)
+            
+        def config_widgets(self):
+            self.configure(
+                background=self.blk400,
+            )
+            self.search_entry = tk.Entry(
+                self,
+                background=self.blk500,
+                foreground="#eeeeee",
+                insertbackground="#eeeeee",
+                insertwidth=1,
+                relief='flat'
+            )
+            self.match_count = tk.Label(
+                self,
+                background=self.blk400,
+                foreground=self.blk500,
+                textvariable=self.match_count_stringvar,
+                relief='flat'
+            )
+            self.prev_match_button = tk.Button(
+                self,
+                background=self.blk400,
+                foreground="#eeeeee",
+                text="ᐱ",
+                relief='flat',
+                command=self.prev_match
+            )
+            self.next_match_button = tk.Button(
+                self,
+                background=self.blk400,
+                foreground="#eeeeee",
+                text="ᐯ",
+                relief='flat',
+                command=self.next_match       
+            )
+            self.exit_button = tk.Button(
+                self,
+                background=self.blk400,
+                foreground="#eeeeee",
+                text="X",
+                relief='flat',
+                command=self.exit
+            )
+
+        def config_bindings(self):
+            self.search_entry.bind('<Return>', self.search_target_textbox)
+
+        def config_grid(self):
+            '''
+            Defines Grid layout for Tk.Widgets defined in init.
+            '''
+            self.columnconfigure(0, weight=1)
+            self.rowconfigure(0, weight=1)
+            self.grid(ipadx=2, ipady=2)
+
+            # Main Widgets
+            self.search_entry.grid(row=0, column=0, padx=5, ipadx=2, ipady=2, sticky='ew')
+            self.match_count.grid(row=0, column=1, padx=2, sticky='ew')
+            self.prev_match_button.grid(row=0, column=2, padx=2, sticky='ew')
+            self.next_match_button.grid(row=0, column=3, padx=2, sticky='ew')
+            self.exit_button.grid(row=0, column=4, padx=2, sticky='ew')
+
+        def exit(self):
+            '''
+            Remove search bar TopLevel when focus is not a child widget of toplevel.
+            '''
+            self.grid_remove()
+
+        def search_target_textbox(self, event=None):
+            # Reset UI counters from previous search
+            self.match_count_stringvar.set("...")
+            self.shown_match = 0
+            # Begin Search Algo.
+            searchEntry = self.search_entry
+            self.target_textbox.tag_delete("search")
+            self.target_textbox.tag_configure("search", background="green")
+            start="1.0"
+            if len(searchEntry.get()) > 0:
+                self.target_textbox.mark_set("insert", self.target_textbox.search(searchEntry.get(), start))
+                self.target_textbox.see("insert")
+                self.shown_match += 1
+
+                while True:
+                    pos = self.target_textbox.search(searchEntry.get(), start, tk.END) 
+                    if pos == "": 
+                        break       
+                    start = pos + "+%dc" % len(searchEntry.get()) 
+                    self.target_textbox.tag_add("search", pos, "%s + %dc" % (pos,len(searchEntry.get())))
+            
+            # Count results and update Counter
+            match_string_count = len(self.target_textbox.tag_ranges('search'))/2
+            self.total_match = "{:n}".format(match_string_count)
+            self.match_count_stringvar.set(str(self.shown_match) + " of " + str(self.total_match))
+            self.target_textbox.focus_set()
+
+        def next_match(self, event=None):
+            if self.match_count_stringvar.get() == "No results": # Default/Empty
+                return
+
+            # move cursor to end of current match
+            while (self.target_textbox.compare(tk.INSERT, "<", tk.END) and
+                "search" in self.target_textbox.tag_names(tk.INSERT)):
+                self.target_textbox.mark_set(tk.INSERT, "insert+1c")
+
+            # Update shown index
+            if int(self.shown_match) < int(self.total_match):
+                self.shown_match += 1
+                self.match_count_stringvar.set(str(self.shown_match) + " of " + str(self.total_match))
+            # find next character with the tag
+            next_match = self.target_textbox.tag_nextrange("search", tk.INSERT)
+            if next_match:
+                self.target_textbox.mark_set(tk.INSERT, next_match[0])
+                self.target_textbox.see(tk.INSERT)
+
+            # prevent default behavior, in case this was called
+            # via a key binding
+            return "break"
+
+        def prev_match(self, event=None):
+            if self.match_count_stringvar.get() == "No results": # Default/Empty
+                return
+
+            # move cursor to end of current match
+            while (self.target_textbox.compare(tk.INSERT, ">", tk.END) and
+                "search" in self.target_textbox.tag_names(tk.INSERT)):
+                self.target_textbox.mark_set(tk.INSERT, "insert+1c")
+
+            # Update shown index
+            if int(self.shown_match) > 0:
+                self.shown_match -= 1
+                self.match_count_stringvar.set(str(self.shown_match) + " of " + str(self.total_match))
+            # find next character with the tag
+            prev_match = self.target_textbox.tag_prevrange("search", tk.INSERT)
+            if prev_match:
+                self.target_textbox.mark_set(tk.INSERT, prev_match[0])
+                self.target_textbox.see(tk.INSERT)
+
+            # prevent default behavior, in case this was called
+            # via a key binding
+            return "break"
 
 
 '''Basecamp Tk/TcL Frames Rendered in the UI.'''
@@ -1662,79 +2080,13 @@ class Tk_CaseViewer(tk.Frame):
             # Destorying SR contents.
             bcamp_api.destroy_sr(self.key_value)
 
-
         def right_click_save_all_notes(self, event=None):
-            # Define result string
-            save_file = filedialog.asksaveasfile(
-                initialdir="/",
-                title="Basecamp - ALL Notes Exporter",
-                initialfile=("allnotes_" + self.key_value),
-                defaultextension=".txt"
-            )
-            #Case Notes Stack
-            save_file.write("-- Case Notes --")
-            save_file.write("\n")
-            # Getting saved case notes in DB.
-            casenotes_val = bcamp_api.query_sr(self.key_value, 'notes')
-            # Writing to save_file
-            if casenotes_val != None:
-                casenotes_linesplit = casenotes_val.splitlines()
-                for newline in casenotes_linesplit:
-                    save_file.write("\t" + newline + "\n")
-            else:
-                save_file.write("\tn/a")
-                save_file.write("\n")
-
-            #File Notes Stack
-            save_file.write("\n")    
-            save_file.write("\n")    
-            save_file.write("-- File Notes --")
-            save_file.write("\n")    
-            # Get a list of tuples containing all file details, with "notes"
-            filenotes_dump = bcamp_api.query_dump_notes(self.key_value, "*")
-            # Format ouput for each file.
-            for file_details in filenotes_dump:
-                fname = file_details[0]
-                fmod_time = datetime.datetime.fromtimestamp(float(file_details[5])).strftime('%H:%M:%S %m/%d/%Y') #TODO FORMAT
-                fpath = file_details[2]
-                fnotes = file_details[9]
-                save_file.write("\t" + fname)
-                save_file.write("\n")                
-                save_file.write("\t\tLast Modified (24 Hour): " + fmod_time)
-                save_file.write("\n")
-                save_file.write("\t\tPath: " + fpath)
-                save_file.write("\n")
-                save_file.write("\t\tNotes: ")
-                save_file.write("\n")
-
-                fnotes_linesplit = fnotes.splitlines()
-                for newline in fnotes_linesplit:
-                    save_file.write("\t\t\t" + newline + "\n")
-                save_file.write("\n")
-            # Saving and closing resulting file!
-            save_file.close()
+            # Utilizing API to generate notes
+            bcamp_api.create_allnotes_file(self.key_value)
 
         def right_click_save_case_notes(self, event=None):
-            # Define result string
-            save_file = filedialog.asksaveasfile(
-                initialdir="/",
-                title="Basecamp - Case Notes Exporter",
-                initialfile=("casenotes_" + self.key_value),
-                defaultextension=".txt"
-            )
-            #Case Notes Stack
-            save_file.write("-- Case Notes --")
-            save_file.write("\n")
-            # Getting saved case notes in DB.
-            casenotes_val = bcamp_api.query_sr(self.key_value, 'notes')
-            # Writing to save_file
-            if casenotes_val != None:
-                casenotes_linesplit = casenotes_val.splitlines()
-                for newline in casenotes_linesplit:
-                    save_file.write("\t" + newline + "\n")
-            else:
-                save_file.write("\tn/a")
-                save_file.write("\n")
+            # Utilizing API to generate notes
+            bcamp_api.create_casenotes_file(self.key_value)
 
         def right_click_clipboard_case_notes(self, event=None):
             casenotes_val = bcamp_api.query_sr(self.key_value, 'notes')
@@ -2169,10 +2521,6 @@ class Tk_SettingsMenu(tk.Toplevel):
     This is the UI menu where users can update the config DB file,
     which contains various CONSTANTS and variables used throughout 
     the Application.
-
-    TODO : Unpacker exe's dont save when changed.
-    TODO : Enabling an unpacker requires a restart before the unpacker
-        is detected.
     '''
 
     def __init__(self, event=None):
@@ -2571,48 +2919,36 @@ class Tk_SettingsMenu(tk.Toplevel):
 
     class Tk_ParsingRules(tk.Frame):
         '''
-        Menu to modify user-defined parsing rules.
+        Menu to modify user-defined parsing rules for the "SimpleParser" 
         '''
         def __init__(self, master):
             super().__init__()
             self.master = master
-            self.line_sub_state = "off"
-            self.keyword_sub_state = "off"
-            self.regex_sub_state = "off"
+            self.new_rule_frame_open = False
+            self.refresh_tree_callback = callbackVar()
+            self.refresh_tree_callback.register_callback(self.update_ar_tree)
+            self.total_rule_cnt = 0
 
             # Tk Methods
             self.config_widgets()
             self.config_grid()
+            self.config_bindings()
+            self.update_ar_tree()
 
         def config_widgets(self):
-            # [Line Parser]
-            #self.line_frame = tk.Frame(
-            #    self.master,
-            #    background="orange"
-            #)
-            #self.line_dropdown = tk.Button(
-            #    self.line_frame,
-            #    text="    Line Parsing Rules     ",
-            #    command=self.expand_line_rules
-            #)
-            #self.line_subframe = tk.Frame(
-            #    self.line_frame,
-            #    background="yellow"
-            #)
-
             # [Active Rules Table]
             self.ar_frame = tk.Frame(
                 self.master,
-                background="yellow"
+                background="#303030"
             )
             self.ar_label = tk.Label(
                 self.master,
-                text="Active Parsing Rules"
+                text="Active Parsing Rules",
+                background="#303030",
+                foreground="#FFFFFF"
             )
             self.ar_tree = ttk.Treeview(
                 self.ar_frame,
-                columns=('Type', 'Return', 'Target File', 'Rule Definition'),
-                selectmode='browse',
             )
             self.ar_tree_ysb = ttk.Scrollbar(
                 self.ar_frame,
@@ -2623,7 +2959,8 @@ class Tk_SettingsMenu(tk.Toplevel):
 
             self.new_rule_btn = tk.Button(
                 self.ar_frame,
-                text="New Rule +"
+                text="New Rule +",
+                command=self.render_new_rule_config
             )
             self.import_rules_btn = tk.Button(
                 self.ar_frame,
@@ -2634,66 +2971,83 @@ class Tk_SettingsMenu(tk.Toplevel):
                 text="Export Ruleset"
             )
 
-            # [BottomBar]
-            self.bbar_frame = tk.Frame(
-                self.master,
-                background="yellow",
+            # [Active Rules Tree Config]
+            self.ar_tree.configure(
+                height=20,
+                style="Custom.Treeview",
+                columns=('Type', 'Return', 'Target File', 'Rule Definition'),
+                displaycolumns=('Type', 'Return', 'Target File', 'Rule Definition'),
+                selectmode='browse',
+            )
+            self.ar_tree.column('#0', width=0, stretch=False)
+            self.ar_tree.heading('Type', text="Type")
+            self.ar_tree.heading('Return', text="Return", anchor='center')
+            self.ar_tree.heading('Target File', text="Target File", anchor='center')
+            self.ar_tree.heading('Rule Definition', text="Rule Definition", anchor='center')
 
+            # [RightClick Menu]
+            self.rc_menu = tk.Menu(
+                self,
+                bg="#272822",
+                fg="#ffffff"
             )
-            self.spacer = tk.Label(
-                self.bbar_frame,
-                text="You shouldnt see this message... :)",
-                background="#303030",
-                foreground="#303030",
+            self.rc_menu.add_command(
+                label="Edit Rule",
+                command=self.edit_rule
             )
-            self.save_bar = tk.Frame(
-                self.bbar_frame,
-                background="#111111"
+            self.rc_menu.add_command(
+                label="Delete Rule",
+                command=self.delete_rule
             )
-            self.save_btn = tk.Button(
-                self.bbar_frame,
-                text="Save and Apply",
-                background='#badc58',
-                foreground='#111111',
-                relief="flat",
-                command=self.save_settings
-            )
+
+
 
         def config_grid(self):
-            # [Line Parser Frame]
-            ## self.line_frame.grid(row=1, column=0, sticky="nsew")
-            ## self.line_frame.columnconfigure(0, weight=1)
-            ## self.line_frame.rowconfigure(0, weight=1)
-            ## self.line_dropdown.grid(row=0, column=0, sticky="ew")
-            ## self.line_subframe.grid(row=1, column=0, sticky="ew")
-            ## self.line_subframe.grid_forget()
-
             # [Active Rules Frame]
-            ## self.ar_frame 
-            ## self.ar_label
-            ## self.ar_tree
-            ## self.ar_tree_ysb
-            ## self.new_rule_btn
-            ## self.new_rule_btn
-            ## self.import_rules_btn
-            ## self.import_rules_btn
+            self.ar_frame.grid(row=1, column=0, sticky="nsew")
+            #self.ar_frame.rowconfigure(3, weight=0) 
+            self.ar_label.grid(row=0, column=0, pady=5, sticky="nsew")
+            self.ar_tree.grid(row=1, column=0, columnspan=2, rowspan=2, sticky="nsew")
+            self.ar_tree_ysb.grid(row=1, column=2, rowspan=2, sticky="nse")
+            self.new_rule_btn.grid(row=4, column=0, sticky="sw", padx=4, pady=4)
+            #self.import_rules_btn.grid(row=2, column=1, sticky="nsew")
+            #self.export_rules_btn.grid(row=2, column=2, sticky="nsew")
 
-            # [BottomBar]
-            self.bbar_frame.grid(
-                row=10, column=0, sticky='nsew'
-            )
-            self.bbar_frame.grid_columnconfigure(0, weight=1)
-            self.spacer.grid(row=0, column=0, columnspan=2, sticky="nsew")
-            self.save_bar.grid(row=1, column=0, columnspan=2, pady=(20,0), sticky="nsew")
-            self.save_bar.columnconfigure(0, weight=1)
-            self.save_btn.grid(row=1, column=0, padx=1, pady=(20,0), sticky='e')
+        def config_bindings(self):
+            self.ar_tree.bind("<ButtonRelease-3>", self.rc_popup)
 
-        def get_rulesets():
+        def rc_popup(self, event):
+            """action in event of button 3 on tree view"""
+            # select row under mouse
+            iid = self.ar_tree.identify_row(event.y)
+            if iid:
+                # mouse pointer over item
+                self.ar_tree.selection_set(iid)
+                self.rc_menu.post(
+                    event.x_root + 10, event.y_root + 10)
+            else:
+                # mouse pointer not over item
+                # occurs when items do not fill frame
+                # no action required
+                pass
+
+        def get_rulesets(self):
             '''
-            Queries the DB for the parsing rules, and populates the active
-            rules tree.
+            Queries the DB for the parsing rules, and updates the 
+            'total_rule_count' var for new rules!
             '''
-            pass
+            parser_ruleset = bcamp_api.dump_parser()
+
+            #debug
+            print("\n***** Parser Rules *****")
+            print(parser_ruleset)
+
+            # Updating total_rule_cnt value for new rule gen
+            self.total_rule_cnt = 0
+            for rule in parser_ruleset:
+                self.total_rule_cnt += 1
+            
+            return parser_ruleset
 
         def save_settings(self):
             '''
@@ -2701,43 +3055,249 @@ class Tk_SettingsMenu(tk.Toplevel):
             '''
             pass
 
-        def expand_line_rules(self):
+        def render_new_rule_config(self):
+            config_menu = self.Rule_Config_Menu(self.ar_frame, 'new', self)
+            config_menu.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=2, pady=(0,5))
+        
+        def update_ar_tree(self, callback_var=None):
             '''
-            Reveals the Line Rules Dropdown Menu.
+            Called when the self.refresh_tree_callback var is modified. This
+            method renders the available rules from the DB into the active
+            rules tree
             '''
-            if self.line_sub_state == "off":
-                # Enable dropdown. 
-                self.line_subframe.grid()
-                self.line_sub_state = "on"
-            elif self.line_sub_state == "on":
-                # disable/remove dropdown. 
-                self.line_subframe.grid_remove()
-                self.line_sub_state = "off"
+            print("$update_ar_tree CALLED")
+            # Call 'get_rulesets' to get new DB dump, and update
+            # the total_rule_cnt val for new rules 
+            p_rules = self.get_rulesets()
 
-        class Rule_Template(tk.Frame):
+            print("\n\n", self.ar_tree.get_children())
+
+            # Iteratate through Parser rules dict to populate ar tree.
+            for rule in p_rules:
+                self.ar_tree.insert('', 
+                    'end', 
+                    iid=rule,
+                    values=(
+                        p_rules[rule]['type'],
+                        p_rules[rule]['return'],
+                        p_rules[rule]['target'], 
+                        p_rules[rule]['rule']),
+                    #tags=(_tag)
+                    )
+
+        def edit_rule(self):
+            ruleid = self.ar_tree.selection()[0]
+            print(ruleid)
+            config_menu = self.Rule_Config_Menu(self.ar_frame, ruleid, self)
+            config_menu.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=2, pady=(0,5))            
+
+        def delete_rule(self):
+            ruleid = self.ar_tree.selection()[0]
+            print(ruleid)
+            self.ar_tree.delete(ruleid)
+
+
+        class Rule_Config_Menu(tk.Frame):
             '''
-            Template of widgets to create a "new" row/rule in the settings menu.
+            Template of widgets to create a "new" row/rule or to edit an
+            exisiting rule.
             '''
-            def __init__(self, master):
+            def __init__(self, master, rule_id, ParserMenu):
                 super().__init__(master=master)
+                self.master = master
+                self.rule_id = rule_id
+                self.ParserMenu = ParserMenu
 
-                id_label = tk.Label(
-                    self
-                )
-                return_spinbox = tk.Spinbox(
+                # Defining Tk Vars
+                self.id_strVar = tk.StringVar()
+                self.type_strVar = tk.StringVar()
+                self.return_strVar = tk.StringVar()
+                self.target_strVar = tk.StringVar()
+                self.rule_strVar = tk.StringVar()
+
+                self.set_vars()
+                self.config_widgets()
+                self.config_grid()
+
+            def config_widgets(self):
+                self.config(bg="#444444")
+                self.top_frame = tk.Frame(
                     self,
-                    values=('all', 'first'),
+                    bg="#272822"
                 )
-                target_entry = tk.Entry(
-                    self,
-                    width=40
+                self.top_label_frame = tk.Frame(
+                    self.top_frame,
+                    bg='#272822',
                 )
-                rule_entry = tk.Text(
+                self.top_label = tk.Label(
+                    self.top_label_frame,
+                    text="Configuring ->",
+                    bg='#272822',
+                    fg='#717463',
+                    relief='flat'
+                )
+                self.id_label = tk.Label(
+                    self.top_label_frame,
+                    textvariable=self.id_strVar,
+                    bg='#272822',
+                    fg='#717463',
+                    relief='flat'
+                )
+                self.exit_menu_btn = tk.Button(
+                    self.top_frame,
+                    text="X",
+                    command=self.close_menu,
+                    bg='#272822',
+                    fg='#717463',
+                    relief='flat'
+                )
+                self.mid_frame = tk.Frame(
                     self,
-                    width=40,
-                    
+                    bg="#444444"
+                )
+
+                self.type_label = tk.LabelFrame(
+                    self.mid_frame,
+                    text="Type:",
+                    bd=0,
+                    bg="#444444",
+                    fg="#FFFFFF"
+                )
+                self.type_spinbox = tk.Spinbox(
+                    self.type_label,
+                    values=('LINE', 'KEYWORD', 'REGEX'),
+                    textvariable=self.type_strVar
+                )
+                self.return_label = tk.LabelFrame(
+                    self.mid_frame,
+                    text="Return:",
+                    bd=0,
+                    bg="#444444",
+                    fg="#FFFFFF"
+                )
+                self.return_spinbox = tk.Spinbox(
+                    self.return_label,
+                    values=('ALL', 'FIRST'),
+                    textvariable=self.return_strVar
+                )
+                self.target_label = tk.LabelFrame(
+                    self.mid_frame,
+                    text="Target File:",
+                    bd=0,
+                    bg="#444444",
+                    fg="#FFFFFF"
+                )
+                self.target_entry = tk.Entry(
+                    self.target_label,
+                    width=68,
+                    textvariable=self.target_strVar
+                )
+                self.bottom_frame = tk.Frame(
+                    self,
+                    bg="#444444"
+                )
+
+                self.rule_label = tk.LabelFrame(
+                    self.bottom_frame,
+                    text="Rule Definition:",
+                    bd=0,
+                    bg="#444444",
+                    fg="#FFFFFF"
+                )
+                self.rule_entry = tk.Entry(
+                    self.rule_label,
+                    width=126,
+                    textvariable=self.rule_strVar
+                )
+                self.add_button = tk.Button(
+                    self.bottom_frame,
+                    text="Save Rule",
+                    bg="#badc58",
+                    fg="#111111",
+                    command=self.update_ruleset,
+                    relief='flat'  
                 )
         
+            def config_grid(self):
+                #self.ruleid_label.grid(row=0, column=0)0
+                self.columnconfigure(0, weight=1)
+                self.top_frame.grid(row=0, column=0, sticky='nsew')
+                self.top_frame.columnconfigure(0, weight=1)
+                self.top_label_frame.grid(row=0, column=0, padx=5, pady=5, sticky='nsw')
+                self.top_label.grid(row=0, column=0)
+                self.id_label.grid(row=0, column=1)
+                self.exit_menu_btn.grid(row=0, column=1, padx=5, pady=5, sticky='nse')
+                self.mid_frame.grid(row=1, column=0, sticky='nsew', pady=4)
+                self.type_label.grid(row=0, column=0, padx=10)
+                self.type_spinbox.grid(row=0, column=0, padx=10, pady=10)
+                self.return_label.grid(row=0, column=1, padx=10)
+                self.return_spinbox.grid(row=0, column=0, padx=10, pady=10)
+                self.target_label.grid(row=0, column=2, padx=10)
+                self.target_entry.grid(row=0, column=0, padx=10, pady=10)
+                self.bottom_frame.grid(row=2, column=0, sticky='nsew')
+                self.bottom_frame.columnconfigure(0, weight=1)                
+                self.rule_label.grid(row=0, column=0, sticky='w', padx=10)
+                self.rule_entry.grid(row=1, column=0, sticky='nsew', padx=10, pady=10)
+                self.add_button.grid(row=2, column=0, sticky='e', padx=10)
+
+            def set_vars(self):
+                if self.rule_id != 'new':
+                    # Get values for ruleID from DB.
+                    self.id_strVar.set(self.rule_id)
+                    self.type_strVar.set(
+                        bcamp_api.query_parser(self.rule_id, 'type'))
+                    self.return_strVar.set(
+                        bcamp_api.query_parser(self.rule_id, 'return'))
+                    self.target_strVar.set(
+                        bcamp_api.query_parser(self.rule_id, 'target'))
+                    self.rule_strVar.set(
+                        bcamp_api.query_parser(self.rule_id, 'rule'))
+                else:
+                    self.id_strVar.set("NEW RULE*")
+                    self.type_strVar.set('line')
+                    self.return_strVar.set('all')
+                    self.target_strVar.set('')
+                    self.rule_strVar.set('')
+
+            def close_menu(self):
+                '''
+                Exit function to remove the config menu from the UI
+                '''
+                self.destroy()
+            
+            def update_ruleset(self):
+                '''
+                When a user either saves a new parsing rule, or edits a rule 
+                in the Setting menu, this method is called by the "Save Rule"
+                button being pressed.
+                '''
+                print("$updating ruleset")
+                ruleid = self.id_strVar.get()
+                newRule = False
+                # Exception for new rules...
+                if ruleid == "NEW RULE*":
+                    # Calculate new rule_id from 'ParserMenu.total_rule_cnt'
+                    newRule = True
+                    ruleid = (self.ParserMenu.total_rule_cnt + 1)
+
+                new_rule_dict = {
+                    'id': ruleid,
+                    'type': self.type_strVar.get(),
+                    'return': self.return_strVar.get(),
+                    'target': self.target_strVar.get(),
+                    'rule': self.rule_strVar.get(),
+                    }
+                print("$new_rule_dict", new_rule_dict)
+
+                if newRule:
+                    # Updating DB with new rule!
+                    bcamp_api.create_parser_rule(new_rule_dict)
+                elif newRule == False:
+                    bcamp_api.update_parser_rule(ruleid, new_rule_dict)
+
+                # Triggering Callback method to refresh Active Rules Tree.
+                self.ParserMenu.refresh_tree_callback.value = True
+
 
     class Tk_Automations(tk.Frame):
         '''
@@ -3324,6 +3884,9 @@ class Tk_ImportMenu(tk.Frame):
 
     def open_bulk_importer(self):
         bcamp_api.bulk_importer(Gui.import_item)
+        # Removing "import" from Tk_WorkspaceTabs.open_tabs
+        pop_index = next((i for i, item in enumerate(self.Tk_WorkspaceTabs.open_tabs) if item[0] == self.import_string), None)
+        del self.Tk_WorkspaceTabs.open_tabs[pop_index]
         # Closing window...
         self.destroy()
 
@@ -4903,8 +5466,6 @@ class Tk_FileBrowser(tk.Frame):
         for item in favfiles_record:
             favfiles_list.append(item[0])
 
-
-
         # Generator Loop to iterate through files in order of Depth.
         while True:
             data = tree_gen(depth_index)
@@ -4928,12 +5489,15 @@ class Tk_FileBrowser(tk.Frame):
         The actual parsers called here are written within the 'bcamp_api' file
         for better organization.
         '''
+        # Launching seperate thread to update DB.
+        threading.Thread(target=bcamp_api.update_files, 
+                args=(self.key_value, updated_file_record)).start()
+
         if enableParser:
             # Sending 'updated_file_record* to the "SimpleParser" engine.
             # 'self' - Tk_FileBrowser passed to update file-record.
             bcamp_api.SimpleParser(updated_file_record, self.key_value, self)
             
-
     # General Treeview Methods
     def toggle_trees_focus(self, event):
         '''
@@ -5198,7 +5762,6 @@ class Tk_FileBrowser(tk.Frame):
             )
             self.frame_label_queue_state = "on"
             self.btn_show_queue['text'] = "^"
-
 
     # Filebrowser Menu Class 
     class CustomTk_Filebrowser_Menu(tk.Menu):
@@ -5609,6 +6172,32 @@ class Tk_CaseNotes(tk.Frame):
         )
         #Getting notes from datastore
         self.text_box.insert('1.0', self.notes_val)
+
+        # Creating "Shortcuts Menu"
+        self.sc_menu = tk.Menu(
+            self,
+            tearoff=False
+        )
+        self.sc_menu.add_command(
+            label="Copy",
+            command=self.copy_sel
+        )
+        self.sc_menu.add_command(
+            label="Paste",
+            command=self.paste_from_clipboard
+        )
+        self.sc_menu.add_separator()
+        self.sc_menu.add_command(
+            label="Search Selection in JIRA",
+            command=self.search_sel_jira
+        )
+        self.sc_menu.add_command(
+            label="Search Selection w/ Google",
+            command=self.search_sel_google
+        )
+
+
+
     
     def config_grid(self):
         self.rowconfigure(1, weight=1)
@@ -5624,11 +6213,14 @@ class Tk_CaseNotes(tk.Frame):
         self.text_box.grid(row=1, column=0, sticky='nsew')
 
     def config_bindings(self):
+        self.text_box.bind("<Button-3>", self.popup_menu)
         self.text_box.bind("<FocusIn>", self.set_focusIn_colors)
         self.text_box.bind("<FocusOut>", self.set_focusOut_colors)
         self.text_box.bind("<<TextModified>>", self.save_notify)
         self.text_box.bind("<Tab>", self.tabtext)
         self.text_box.bind("<Control-s>", self.save_notes)
+        #self.text_box.bind("<Control-c>", self.copy_sel)
+        #self.text_box.bind("<Control-v>", self.paste_from_clipboard)
 
     def set_focusIn_colors(self, event):
         if self.title.get() == "⬤ Case Notes":
@@ -5653,6 +6245,30 @@ class Tk_CaseNotes(tk.Frame):
         self.title_label.config(
             foreground="#888888",
         )
+
+    def popup_menu(self, event):
+        self.sc_menu.post(event.x_root + 10, event.y_root + 10)
+
+    def paste_from_clipboard(self, event=None):
+        # Get clipboard
+        content = bcamp_api.from_win_clipboard_str()
+        # Insert to textbox.
+        self.text_box.insert(tk.INSERT, content)
+        
+    def copy_sel(self, event=None):
+        content = self.text_box.selection_get()
+        print("content>", content)
+        bcamp_api.to_win_clipboard(content)     
+
+    def search_sel_jira(self):
+        content = self.text_box.selection_get()
+        print("content>", content)
+        bcamp_api.search_w_jira(content)
+    
+    def search_sel_google(self):
+        content = self.text_box.selection_get()
+        print("content>", content)
+        bcamp_api.search_w_google(content)
 
     def save_notify(self, event):
         self.title.set("⬤ CaseNotes")
@@ -5838,6 +6454,8 @@ class Tk_FileNotes(tk.Frame):
         self.selected_file = fb_cur_sel
         # Query Notes for File
         notes_val = bcamp_api.query_file(self.key_value, 'notes', fb_cur_sel)
+        print("$notes_val", notes_val)
+        print("$fb_cur_sel", fb_cur_sel)
         if notes_val == None:
             notes_val = ""
         # Refresh TextBox Widget
@@ -5998,6 +6616,22 @@ class Tk_LogViewer(tk.Frame):
         # Intialize Tk_LogSearchBar
         self.search_bar = Tk_LogSearchBar(self.notepad_top_frame, self.key_value, self.text_box)
 
+        # Creating "Shortcuts Menu"
+        self.sc_menu = tk.Menu(
+            self,
+            tearoff=False
+        )
+        self.sc_menu.add_command(
+            label="Search Selection in JIRA",
+            command=self.search_sel_jira
+        )
+        self.sc_menu.add_command(
+            label="Search Selection w/ Google",
+            command=self.search_sel_google
+        )
+
+
+
     def config_grid(self):
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
@@ -6056,48 +6690,11 @@ class Tk_LogViewer(tk.Frame):
 
     def config_bindings(self):
         self.text_box.bind("<Tab>", self.tabtext)
+        self.text_box.bind("<Button-3>", self.popup_menu)
         #self.text_box.bind("<FocusIn>", self.set_focusIn_colors)
         #self.text_box.bind("<FocusOut>", self.set_focusOut_colors)
         #self.text_box.bind("<<TextModified>>", self.save_notify)
         #self.text_box.bind("<Key>", lambda e: "break") # Readonly textbox
-
-    #def set_focusIn_colors(self, event):
-    #    self.title_label.config(
-    #        foreground="#CCCCCC",
-    #    )
-    #    if self.show_notes_intvar.get() == 1:
-    #        self.file_notes_button.config(
-    #            background='#404b4d',
-    #            foreground='#D5A336',
-    #        )
-    #    else:
-    #        self.file_notes_button.config(
-    #            background='#404b4d',
-    #            foreground='#ffffff',
-    #        )
-    #    if self.wordwrap_intvar.get() == 0:
-    #        self.wordwrap_button.config(
-    #            background='#404b4d',
-    #            foreground='#D5A336',
-    #        )
-    #    else:
-    #        self.wordwrap_button.config(
-    #            background='#404b4d',
-    #            foreground='#ffffff',
-    #        )
-    #
-    #def set_focusOut_colors(self, event):
-    #    self.title_label.config(
-    #        foreground="#888888",
-    #    )
-    #    self.file_notes_button.config(
-    #        background='#404b4d',
-    #        foreground='#5b6366',
-    #    )
-    #    self.wordwrap_button.config(
-    #        background='#404b4d',
-    #        foreground='#5b6366',
-    #    )        
 
     def open_selected_file(self, fb_cur_sel):
         '''
@@ -6248,6 +6845,23 @@ class Tk_LogViewer(tk.Frame):
             return "break"
         except:
             pass
+
+
+
+
+
+    def popup_menu(self, event):
+        self.sc_menu.post(event.x_root + 10, event.y_root + 10)
+
+    def search_sel_jira(self):
+        content = self.text_box.selection_get()
+        print("content>", content)
+        bcamp_api.search_w_jira(content)
+    
+    def search_sel_google(self):
+        content = self.text_box.selection_get()
+        print("content>", content)
+        bcamp_api.search_w_google(content)
 
 
 class Tk_LogSearchBar(tk.Frame):
@@ -6410,7 +7024,6 @@ class Tk_LogSearchBar(tk.Frame):
         # prevent default behavior, in case this was called
         # via a key binding
         return "break"
-
 
     def prev_match(self, event=None):
         if self.match_count_stringvar.get() == "No results": # Default/Empty
