@@ -1,0 +1,68 @@
+TO-DO List
+
+        [DONE]> Window: Alt-Enter Bind to enable/disable fullscreen of root window.
+        [DONE]> Window: Theme updates across UI for cleaner and look and more legibility.
+        [DONE]> Core: Automations need to be migrated to SQLite3
+        [DONE]> Core: Config.json to be removed COMPLETELY.
+
+        [DONE]> FileBrowser : Local Content does not Upload
+        [DONE]> FileBrowser : If no content in og import, table does not get created.
+        [DONE]> FileBrowser : Local files title should be "Local Files (Downloads)"
+        [DONE]> FileBrowser : Option to disable logViewer render on click.
+        [DONE]> Filebrowser : 'Upload' does not have a progress bar
+
+        [DONE]> FileNotes : do not render notes for selected file.
+        [DONE]> FileNotes : They are not saved to the DB either.
+
+        [DONE]> Import Menu needs to be adjusted to scale
+        [DONE]> ImportMenu : Does not allow copy of SR into UI.
+        [DONE]> ImportMenu : Sr number doesnt dump into field automatically.
+        [DONE]> ImportMenu : Bulk imports are broken.
+        [DONE]> Import Menu : Needs a download all to local option.
+
+        [DONE]> SettingsMenu-Automations : Automations need the option to define the path to third-pary exe's in the UI.
+        [DONE]> SettingsMenu-Automations : When automations are removed from the extensions DIR, their record PERSIST in the
+            DB, need to enforce that the DB and reality match.
+
+        [DONE]> Caseviewer: Disabled Scrollbar needs to be DARK.
+        [DONE]> CaseViewer : Template grows incorrectly when Tag's are added post import.
+        [DONE]> CaseVeiwer : SEARCH NEEDS TO BE ADDED!
+        [DONE]> CaseViewer-Search : Needs to handle various case
+        [DONE]> CaseViewer-Search : Needs to handle partial string matches. (US bank, and TelBank both return on 'bank')
+
+        [DONE]> API : SimpleParser BLOCKED because the refresh_filebrowser method is ran twice, overwriting
+            the contents from local, or remote. Needs to be refactored.
+
+        [DONE]> BottomBar : Progressbar needs to be rendered here w/ color for percentage.
+    
+
+
+    [IN PRO]> Filebrowser : TopBar to be added with various shortcuts
+        - Refresh
+        - Download All to Local
+        - Upload All to Local
+    > Filebrowser : Need to define callback method when files change to refresh automatically.
+    > FileBrowser : Favorites will render duplicates if in local and remote.
+
+    > WorkspaceTabs : ALWAYS VISIBLE FOR THE WORKPANES (Option)
+    > LogViewer : Search where all lines that match are placed into sub-pane.
+    > SimpleParser : Editing a parsing rule doesnt update the UI.
+    > CaseNotes : Shift-Tab does not undo Indents.
+    > CaseNotes : MulitTab lines indent differently than single indents in the "allnotes_X" file.
+    > CaseNotes : Casenotes, FileNotes, and LogView need to share the same customTextbox Class.
+    - Workspaces : Exit button within the Tab to close window.
+    - Workspaces : Redesign UX/UI for Showing or Hiding the various Workspace Panes.
+
+    [Ideas]
+    - Files with notes should have some kind of UI notifications
+    - JIRA status check based on bug state using Jira API.
+    - JIRA preformatted search, leverage product for case if defined.
+
+
+
+    exit_red - #F92672
+    YELLOW              "#E6CD4A"
+    lightText           #8B9798
+    lightgrn            #A6E22E
+
+    LightBase           "#272822" -- #0E0F09
