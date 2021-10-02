@@ -9,16 +9,16 @@ to give you an idea of how these should be organized/written.
 import os
 import subprocess
 
-def run(target_file_path, local_path_of_target, exe_paths):
+def run(target_file_path, local_path_of_target, exe_lst):
     # Debug Logging
     print("***", "\n",
         "target_file_path:", target_file_path, "\n",
         "local_path_of_target:", local_path_of_target, "\n",
-        "exe_paths:", exe_paths, "\n",
+        "exe_lst:", exe_lst, "\n",
         "***")
 
-    # Saving *only* exe stored in "exe_paths" which is Python List obj.
-    external_exe = exe_paths[0]
+    # Saving *only* exe stored in "exe_lst" which is Python List obj.
+    external_exe = exe_lst[0]['path']
 
     # LETS GET TO UNPACKING
     tempEnc = os.path.basename(local_path_of_target)

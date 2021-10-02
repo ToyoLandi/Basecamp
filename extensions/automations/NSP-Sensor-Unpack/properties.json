@@ -3,7 +3,7 @@
     "version": "1.1",
     "extensions": ".enc",
     "description": "Unpacks encrypted Sensor Trace .enc files using the legacy 'nsp_report.exe'.",
-    "exe": ["C:\\Program Files (x86)\\Nsp Report\\nsp_report.exe"],
+    "exe": [{"name":"NSP Report Tool", "path":"C:\\Program Files (x86)\\Nsp Report\\nsp_report.exe"}],
     "downloadFirst": true,
     "type": "unpack"
 }

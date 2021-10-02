@@ -71,7 +71,6 @@ class CreateDB:
         self.dbshell.execute(self.automations_schema())
         self.dbshell.execute(self.cases_schema())
         self.dbshell.execute(self.tags_schema())
-        self.dbshell.execute(self.logviewer_supported_ext_schema())
         self.dbshell.execute(self.favorite_files_schema())
         self.dbshell.execute(self.parser_schema())
 
@@ -85,28 +84,6 @@ class CreateDB:
         self.db_connection.commit()
         self.dbshell.close()
 
-    def cases_schema(self):
-        '''
-        Main table that contains all imported SRs with their local data such
-        as Notes, Account strings, bug_ids, etc.
-        '''
-        query = """ CREATE TABLE IF NOT EXISTS cases (
-                        sr_number TEXT UNIQUE,
-                        remote_path TEXT NOT NULL,
-                        local_path TEXT NOT NULL,
-                        pinned INTEGER NOT NULL,
-                        product TEXT,
-                        account TEXT,
-                        notes TEXT,
-                        bug_id TEXT,
-                        workspace TEXT,
-                        files_table TEXT,
-                        import_time TEXT,
-                        last_ran_time TEXT,
-                        last_file_count TEXT
-             ); """
-        return query
-    
     def config_schema(self):
         '''
         The table that defines user choices, and general application config
@@ -125,7 +102,32 @@ class CreateDB:
                         ui_render_top_menu TEXT NOT NULL,
                         ui_caseviewer_location TEXT NOT NULL,
                         ui_render_caseviewer TEXT NOT NULL,
+                        ui_caseviewer_search_location TEXT NOT NULL,
+                        ui_render_caseviewer_search TEXT NOT NULL,
+                        ui_render_favtree TEXT NOT NULL,
                         user_texteditor TEXT NOT NULL                       
+             ); """
+        return query
+
+    def cases_schema(self):
+        '''
+        Main table that contains all imported SRs with their local data such
+        as Notes, Account strings, bug_ids, etc.
+        '''
+        query = """ CREATE TABLE IF NOT EXISTS cases (
+                        sr_number TEXT UNIQUE,
+                        remote_path TEXT NOT NULL,
+                        local_path TEXT NOT NULL,
+                        pinned INTEGER NOT NULL,
+                        product TEXT COLLATE NOCASE,
+                        account TEXT COLLATE NOCASE,
+                        notes TEXT,
+                        bug_id TEXT COLLATE NOCASE,
+                        workspace TEXT,
+                        files_table TEXT,
+                        import_time TEXT,
+                        last_ran_time TEXT,
+                        last_file_count TEXT
              ); """
         return query
 
@@ -180,16 +182,6 @@ class CreateDB:
                         UNIQUE(file_name, root_path) ON CONFLICT IGNORE
         ); """
         return query
-    
-    def logviewer_supported_ext_schema(self):
-        '''
-        Schema that defines supported file extensions to render in 
-        LogViewer within the UI.
-        '''
-        query = """CREATE TABLE IF NOT EXISTS logviewer_supported_ext (
-                        extension TEXT UNIQUE NOT NULL
-        ); """
-        return query
 
     def tags_schema(self):
         '''
@@ -203,7 +195,6 @@ class CreateDB:
         ); """
         return query
 
-    
     def parser_schema(self):
         '''
         Defines how each SR's files table should be constructed! 
