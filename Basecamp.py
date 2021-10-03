@@ -67,33 +67,6 @@ from tkinter import ttk, colorchooser, filedialog, dnd
 ROOTPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
 
 
-'''Registers Var as a callback method. Used for 'events' throughout the UI.'''
-class callbackVar:
-    '''
-    When the assigned variable is changed, a callback command can be called.
-    '''
-
-    def __init__(self, initial_value=""):
-        self._value = initial_value
-        self._callbacks = []
-
-    @property
-    def value(self):
-        return self._value
-
-    @value.setter
-    def value(self, new_value):
-        self._value = new_value
-        self._notify_observers(new_value)
-
-    def _notify_observers(self, new_value):
-        for callback in self._callbacks:
-            callback(new_value)
-
-    def register_callback(self, callback):
-        self._callbacks.append(callback)
-
-
 '''Main UI Class'''
 class Gui(tk.Tk):
     '''
@@ -108,17 +81,13 @@ class Gui(tk.Tk):
     - https://docs.python.org/3/library/tk.ttk.html#module-tk.ttk
 
     '''
-    # Defined outside of __init__ with intent... and a little Python spite. :)
+    # ***[ GLOBAL CALLBACK VARIABLES ]***
+
     # Import Menu results Python Dict.
-    import_item = callbackVar()
-    # Tuples of priority number (int) and SR number.
-    CaseViewer_index = []
-    refresh_CaseView = callbackVar()
-    # Filebrowser Progress Raw Poll result - for copy/unpack UI updates
-    # Formatted result of 'fb_progress_val' - see *update_fb_prog()*
-    fb_progress_val = callbackVar()
-    fb_progress_string = callbackVar()
-    fb_queue_string = callbackVar()
+    import_item = bcamp_api.callbackVar()
+    # Global var to render or hide the "Favorites" Tree in the Filebrowser.
+    fb_showfavtree = bcamp_api.callbackVar()
+
 
 
     def __init__(self):
@@ -130,36 +99,35 @@ class Gui(tk.Tk):
         bcamp_api.Automations()
 
         # Starting Queue Daemons - See "bcamp_api.py' for details.
-        self.file_queue = bcamp_api.FileOpsQueue(self)
+        self.file_queue = bcamp_api.FileOpsQueue()
 
         # Register Callback method for "Gui.import_item" changes to 
         # "import_handler()". These will be dictionary objects from
         # the Tk_ImportMenu
         Gui.import_item.register_callback(self.import_handler)
 
-        # Register callback for fb_progress_val updates that will
-        # come from *self.file_queue*.
-        Gui.fb_progress_val.register_callback(self.update_fb_prog)
-
         # Intializing Main Tk/Ttk Classes
-        self.BottomBar = Tk_BottomBar()
+        self.BottomBar = Tk_BottomBar(self.file_queue)
         self.MasterPane = Tk_RootPane(self)
         self.Workbench = Tk_WorkspaceTabs(self.MasterPane, self.file_queue)
-        self.CaseViewer = Tk_CaseViewer(self.MasterPane, self.Workbench)
+        self.CaseViewer = Tk_CaseViewer(self.MasterPane, self.Workbench, self)
         #self.TodoList = Tk_TodoList(self.MasterPane)
-        Gui.refresh_CaseView.register_callback(self.CaseViewer.update_CaseViewer_tiles)
+
+        # Fullscreen Var for <Alt-Enter>
+        self.w_fullscreen = False
 
         # Configuring Tk ELements for Main Window.
         self.config_widgets()
         self.config_grid()
         self.config_window()
         self.config_binds()
+        self.ttk_theme_changes()
 
         # Configuring UI based on user-config in DB.
         self.render_initial_config()
         
         # STARTING TK/TTK UI
-        self.configure(background="black")
+
         self.start_ui()
         # Nothing should be past "start_ui()" - The UI wont care about it :)
 
@@ -170,6 +138,8 @@ class Gui(tk.Tk):
 
         This also contains ttk.Style def's for Notebook and Treeview
         '''
+        self.configure(background="black")
+
         # Top Menu
         self.top_menu = tk.Menu(self, tearoff=0)
 
@@ -199,103 +169,43 @@ class Gui(tk.Tk):
         self.tm_view.add_command(
             label="Show Top Menu              Left Alt", command=self.toggle_top_menu)
         self.tm_view.add_separator()
+        ####
         self.tm_view.add_command(
-            label="Show CaseViewer            Ctrl+B", command=self.toggle_CaseViewer)
+            label="Show CaseViewer            Ctrl+B", 
+                command=self.toggle_CaseViewer
+            )
         self.tm_view.add_command(
             label="Move CaseViewer Left", command=lambda 
-                pos='left': self.update_caseviewer_pos(pos))
+                pos='left': self.update_caseviewer_pos(pos)
+            )
         self.tm_view.add_command(
             label="Move CaseViewer Right", command=lambda 
-                pos='right': self.update_caseviewer_pos(pos))
-        
+                pos='right': self.update_caseviewer_pos(pos)
+            )
+        self.tm_view.add_command(
+            label="Toggle CaseViewer Search", 
+            command=self.toggle_CaseViewer_search
+            )
+        self.tm_view.add_command(
+            label="Move Caseviewer Search to Top", command=lambda 
+                pos='top': self.update_caseviewer_search_pos(pos)
+            )
+        self.tm_view.add_command(
+            label="Move Caseviewer Search to Bottom", command=lambda 
+                pos='bottom': self.update_caseviewer_search_pos(pos)
+            )
+        ####
+        self.tm_view.add_separator()
+        self.tm_view.add_command(
+            label="Toggle Filebrowser Favs", command=self.toggle_favTree)
+
+
         # Adding "SubMenus" to Top_Menu widget.
         self.top_menu.add_cascade(label="File", menu=self.tm_file)
         self.top_menu.add_cascade(label="View", menu=self.tm_view)
 
         # Empty Top Menu - For disabling if user chooses.
         self.empty_menu = tk.Menu(self)
-
-        # Ttk Styles from here...
-        self.def_font = tk_font.Font(
-            family="Segoe UI", size=12, weight="normal", slant="roman")
-
-        # BUGFIX FOR tk TREEVIEW COLORS 
-        def fixed_map(option):
-            # Fix for setting text colour for tk 8.6.9
-            # From: https://core.tcl.tk/tk/info/509cafafae
-            #
-            # Returns the style map for 'option' with any styles starting with
-            # ('!disabled', '!selected', ...) filtered out.
-
-            # style.map() returns an empty list for missing options, so this
-            # should be future-safe.
-            return [elm for elm in style.map('Treeview', query_opt=option) if
-                    elm[:2] != ('!disabled', '!selected')]
-
-        # Defining Treeview header color style.
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.element_create(
-            "Custom.Treeheading.border", "from", "default")
-        style.layout("Custom.Treeview.Heading", [
-            ("Custom.Treeheading.cell", {'sticky': 'nswe'}),
-            ("Custom.Treeheading.border", {'sticky': 'nswe', 'children': [
-                ("Custom.Treeheading.padding", {'sticky': 'nswe', 'children': [
-                    ("Custom.Treeheading.image", {
-                        'side': 'right', 'sticky': ''}),
-                    ("Custom.Treeheading.text", {'sticky': 'we'})
-                ]})
-            ]}),
-        ])
-        style.layout("Custom.Treeview", [('Custom.Treeview.treearea', {'sticky': 'nswe'})])
-        style.configure("Custom.Treeview.Heading",
-                        background="#212121", activebackground="#313131", foreground="white", relief="flat")
-        style.map("Custom.Treeview.Heading",
-                    relief=[('active', 'groove'), ('pressed', 'flat')])
-        style.map('Custom.Treeview',
-                  foreground=fixed_map('foreground'),
-                  background=fixed_map('background'),
-                  )
-        style.configure("Custom.Treeview",
-                        fieldbackground="#0a0a0a", 
-                        background="#0a0a0a", 
-                        foreground="#fdfdfd",
-                        relief='flat',
-                        highlightthickness=0,
-                        bd=0,)
-        
-        # Defining Scrollbar Styles.
-        style.configure("Vertical.TScrollbar", gripcount=0,
-                background="#717479", darkcolor="gray", lightcolor="gray",
-                troughcolor="#1E1F21", bordercolor="black", arrowcolor="black")
-        style.configure("Horizontal.TScrollbar", gripcount=0,
-                background="#717479", darkcolor="gray", lightcolor="gray",
-                troughcolor="#1E1F21", bordercolor="black", arrowcolor="black")
-
-        # Defining the Notebook style colors for "Worktabs".
-        myTabBarColor = "#05070F"
-        myTabBackgroundColor = "#090B13"
-        myTabForegroundColor = "#B2B6BC"
-        myActiveTabBackgroundColor = "#1E1F21"
-        myActiveTabForegroundColor = "#D5A336"
-
-        style.map("TNotebook.Tab", background=[("selected", myActiveTabBackgroundColor)], foreground=[("selected", myActiveTabForegroundColor)]);
-        # Import the Notebook.tab element from the default theme
-        style.element_create('Plain.Notebook.tab', "from", 'clam')
-        # Redefine the TNotebook Tab layout to use the new element
-        style.layout("TNotebook.Tab",
-            [('Plain.Notebook.tab', {'children':
-                [('Notebook.padding', {'side': 'top', 'children':
-                    [('Notebook.focus', {'side': 'top', 'children':
-                        [('Notebook.label', {'side': 'top', 'sticky': ''})],
-                    'sticky': 'nswe'})],
-                'sticky': 'nswe'})],
-            'sticky': 'nswe'})])
-        
-        #%%ass
-        style.configure("TNotebook", background=myTabBarColor, borderwidth=0, bordercolor=myTabBarColor, focusthickness=40)
-        style.configure("TNotebook.Tab", background=myTabBackgroundColor, foreground=myTabForegroundColor,
-                                            lightcolor=myTabBackgroundColor, borderwidth=0, bordercolor=myTabBarColor)
 
     def config_grid(self):
         '''
@@ -335,6 +245,98 @@ class Gui(tk.Tk):
         self.bind('<Control-x>', self.export_cases_backup)
         self.bind('<Control-r>', self.import_cases_backup)
         self.bind('<Alt_L>', self.toggle_top_menu)
+        self.bind('<Alt-Return>', self.make_fullscreen)
+
+    def ttk_theme_changes(self):
+        '''
+        Container method to organize all Ttk theme changes used globally 
+        throughout the UI.
+        '''
+        # Ttk Styles from here...
+        self.def_font = tk_font.Font(
+            family="Segoe UI", size=12, weight="normal", slant="roman")
+        self.tab_font = tk_font.Font(
+            family="Segoe UI", size=10, weight="bold", slant="roman")
+
+        # BUGFIX FOR tk TREEVIEW COLORS 
+        def fixed_map(option):
+            # Fix for setting text colour for tk 8.6.9
+            # From: https://core.tcl.tk/tk/info/509cafafae
+            #
+            # Returns the style map for 'option' with any styles starting with
+            # ('!disabled', '!selected', ...) filtered out.
+
+            # style.map() returns an empty list for missing options, so this
+            # should be future-safe.
+            return [elm for elm in style.map('Treeview', query_opt=option) if
+                    elm[:2] != ('!disabled', '!selected')]
+
+        # Defining Treeview header color style.
+        style = ttk.Style()
+        style.theme_use('default')
+        style.element_create(
+            "Custom.Treeheading.border", "from", "default")
+        style.layout("Custom.Treeview.Heading", [
+            ("Custom.Treeheading.cell", {'sticky': 'nswe'}),
+            ("Custom.Treeheading.border", {'sticky': 'nswe', 'children': [
+                ("Custom.Treeheading.padding", {'sticky': 'nswe', 'children': [
+                    ("Custom.Treeheading.image", {
+                        'side': 'right', 'sticky': ''}),
+                    ("Custom.Treeheading.text", {'sticky': 'we'})
+                ]})
+            ]}),
+        ])
+        style.layout("Custom.Treeview", [('Custom.Treeview.treearea', {'sticky': 'nswe'})])
+        style.configure("Custom.Treeview.Heading",
+                        background="#212121", activebackground="#313131", foreground="white", relief="flat")
+        style.map("Custom.Treeview.Heading",
+                    relief=[('active', 'groove'), ('pressed', 'flat')])
+        style.map('Custom.Treeview',
+                  foreground=fixed_map('foreground'),
+                  background=fixed_map('background'),
+                  )
+        style.configure("Custom.Treeview",
+                        fieldbackground="#0a0a0a", 
+                        background="#0a0a0a", 
+                        foreground="#fdfdfd",
+                        relief='flat',
+                        highlightthickness=0,
+                        bd=0,)
+        
+        # Defining Scrollbar Styles.
+        style.configure("Vertical.TScrollbar", gripcount=0,
+                background="#2B2B28", darkcolor="red", lightcolor="red",
+                troughcolor="#101010", bordercolor="#101010", arrowcolor="#5E5E58",
+                troughrelief='flat', borderwidth=0, relief='flat')
+        style.configure("Horizontal.TScrollbar", gripcount=0,
+                background="#404247", darkcolor="red", lightcolor="red",
+                troughcolor="#101010", bordercolor="black", arrowcolor="black",
+                troughrelief='flat', borderwidth=0, relief='flat')
+
+        # Defining the Notebook style colors for "Worktabs".
+        myTabBarColor = "#10100B"
+        myTabBackgroundColor = "#1D1E19"
+        myTabForegroundColor = "#8B9798"
+        myActiveTabBackgroundColor = "#414438"
+        myActiveTabForegroundColor = "#FFE153"
+
+        style.map("TNotebook.Tab", background=[("selected", myActiveTabBackgroundColor)], foreground=[("selected", myActiveTabForegroundColor)]);
+        # Import the Notebook.tab element from the default theme
+        style.element_create('Plain.Notebook.tab', "from", 'clam')
+        # Redefine the TNotebook Tab layout to use the new element
+        style.layout("TNotebook.Tab",
+            [('Plain.Notebook.tab', {'children':
+                [('Notebook.padding', {'side': 'top', 'children':
+                    [('Notebook.focus', {'side': 'top', 'children':
+                        [('Notebook.label', {'side': 'top', 'sticky': ''})],
+                    'sticky': 'nswe'})],
+                'sticky': 'nswe'})],
+            'sticky': 'nswe'})])
+        
+        style.configure("TNotebook", background=myTabBarColor, borderwidth=0, bordercolor=myTabBarColor, focusthickness=40)
+        style.configure("TNotebook.Tab", background=myTabBackgroundColor,
+            foreground=myTabForegroundColor, lightcolor=myTabBarColor,
+            borderwidth=0, bordercolor=myTabBackgroundColor, font=self.tab_font)
 
     def update_widgets(self):
         '''
@@ -342,26 +344,43 @@ class Gui(tk.Tk):
         an element besides a tk.Var() it should be defined here.
         '''
         self.update()
+        # -------------------------------
         # DO NOT WRITE ABOVE THIS COMMENT
+        # -------------------------------
+        nas = bcamp_api.get_config("remote_root")
+        devmode = bcamp_api.get_config("dev_mode")
+
         # BottomBar Remote Share connectivity Poll
-        if os.access(bcamp_api.get_config("remote_root"), os.R_OK):
+        if os.access(nas, os.R_OK):
             self.BottomBar.bb_remote_canvas.itemconfigure(self.BottomBar.bb_remote_off, state='hidden')
             self.BottomBar.bb_remote_canvas.itemconfigure(self.BottomBar.bb_remote_on, state='normal')
+            # Changing color for Dev Mode when enabled.
+            if devmode == "True":
+                self.BottomBar.bb_remote_canvas.itemconfigure(self.BottomBar.bb_remote_on, fill='#FD7C29')
+            elif devmode == "False":
+                self.BottomBar.bb_remote_canvas.itemconfigure(self.BottomBar.bb_remote_on, fill='#6ab04c')
         else:
             # Make the DOT red if DEAD.
             self.BottomBar.bb_remote_canvas.itemconfigure(self.BottomBar.bb_remote_on, state='hidden')
             self.BottomBar.bb_remote_canvas.itemconfigure(self.BottomBar.bb_remote_off, state='normal')
 
         # BottomBar Telemetry connectivity Poll
-        if os.access(bcamp_api.get_config("remote_root"), os.R_OK):
+        if os.access(nas, os.R_OK):
             self.BottomBar.bb_telemen_canvas.itemconfigure(self.BottomBar.bb_telemen_off, state='hidden')
             self.BottomBar.bb_telemen_canvas.itemconfigure(self.BottomBar.bb_telemen_on, state='normal')
+            # Changing color for Dev Mode when enabled.
+            if devmode == "True":
+                self.BottomBar.bb_telemen_canvas.itemconfigure(self.BottomBar.bb_telemen_on, fill='#FD7C29')
+            elif devmode == "False":
+                self.BottomBar.bb_telemen_canvas.itemconfigure(self.BottomBar.bb_telemen_on, fill='#22a6b3')
         else:
             # Make the DOT red if DEAD.
             self.BottomBar.bb_telemen_canvas.itemconfigure(self.BottomBar.bb_telemen_on, state='hidden')
             self.BottomBar.bb_telemen_canvas.itemconfigure(self.BottomBar.bb_telemen_off, state='normal')        
 
+        # -------------------------------
         # DO NOT WRITE BELOW THIS COMMENT
+        # -------------------------------
         self.after(2000, self.update_widgets)
 
     def start_ui(self):
@@ -392,16 +411,16 @@ class Gui(tk.Tk):
         # [Caseviewer/Workbench] location
         if render_caseviewer == "True":
             if caseviewer_pos == 'left':
-                self.MasterPane.add(self.CaseViewer, sticky='nsew', width=250)
+                self.MasterPane.add(self.CaseViewer, sticky='nsew', width=280)
                 self.MasterPane.add(self.Workbench, sticky='nsew') # Always rendered @ launch
             elif caseviewer_pos == 'right':
                 # Resize Workbench First,
                 self.MasterPane.update_idletasks()
                 MasterPane_width = self.MasterPane.winfo_width()
-                Workbench_width = MasterPane_width - 250 #= default width
+                Workbench_width = MasterPane_width - 280 #= default width
                 self.MasterPane.paneconfig(self.Workbench, width=Workbench_width)
                 # Then Add CaseViewer
-                self.MasterPane.add(self.CaseViewer, sticky='nsew', after=self.Workbench, width=250)
+                self.MasterPane.add(self.CaseViewer, sticky='nsew', after=self.Workbench, width=280)
         elif render_caseviewer == "False":
             # Only render Workbench
             self.MasterPane.add(self.Workbench, sticky='nsew') # Always rendered @ launch
@@ -420,34 +439,30 @@ class Gui(tk.Tk):
 
         # Now render based on pos and update DB.
         if pos == "left":
-            self.MasterPane.add(self.CaseViewer, sticky='nsew', before=self.Workbench, width=250)
+            self.MasterPane.add(self.CaseViewer, sticky='nsew', before=self.Workbench, width=300)
             bcamp_api.update_config('ui_caseviewer_location', 'left')
             bcamp_api.update_config('ui_render_caseviewer', 'True')   
         if pos == "right":
-            self.MasterPane.add(self.CaseViewer, sticky='nsew', after=self.Workbench, width=250)
+            self.MasterPane.add(self.CaseViewer, sticky='nsew', after=self.Workbench, width=300)
             bcamp_api.update_config('ui_caseviewer_location', 'right')
             bcamp_api.update_config('ui_render_caseviewer', 'True')
             # Resize self.Workbench
             MasterPane_width = self.MasterPane.winfo_width()
-            Workbench_width = MasterPane_width - 250 #= default width
+            Workbench_width = MasterPane_width - 300 #= default width
             self.MasterPane.paneconfig(self.Workbench, width=Workbench_width)
 
-    # Create Imported themes.
-    def create_themes(self):
-        '''
-        Creates the ttk style themes.
-
-        Further Reading...
-        https://docs.python.org/3/library/tkinter.ttk.html#ttk-styling
-        '''
-
-        style = ttk.Style()
-        # TODO - For Theme in theme folder...
-        style.theme_create('test-Alpine', parent='clam') # TODO - ?Add settings here for for loop?
-        ###
-        style.theme_settings('test-Alpine', {
-
-        })
+    def update_caseviewer_search_pos(self, pos):
+        # First, check if Caseviewer is rendered.
+        if bcamp_api.get_config('ui_render_caseviewer_search') == "True":
+            # If so, remove it, and move it!
+            self.CaseViewer.search_frame.grid_remove()
+        
+        if pos == 'top':
+            bcamp_api.update_config('ui_caseviewer_search_location', 'top')
+            self.CaseViewer.update_search_pos()
+        if pos == 'bottom':
+            bcamp_api.update_config('ui_caseviewer_search_location', 'bottom')
+            self.CaseViewer.update_search_pos()
 
     # Keyboard-Binding Methods
     def open_settings_menu(self, event=None):
@@ -485,9 +500,9 @@ class Gui(tk.Tk):
         if bcamp_api.get_config('ui_render_caseviewer') == "False":
             # Last setting was "hidden" - Render Caseviewer...
             if bcamp_api.get_config('ui_caseviewer_location') == 'left':
-                self.MasterPane.add(self.CaseViewer, sticky='nsew', before=self.Workbench, width=250)
+                self.MasterPane.add(self.CaseViewer, sticky='nsew', before=self.Workbench, width=300)
             elif bcamp_api.get_config('ui_caseviewer_location') == 'right':
-                self.MasterPane.add(self.CaseViewer, sticky='nsew', after=self.Workbench, width=250)
+                self.MasterPane.add(self.CaseViewer, sticky='nsew', after=self.Workbench, width=300)
             # and update the DB
             bcamp_api.update_config('ui_render_caseviewer', "True")
 
@@ -496,6 +511,23 @@ class Gui(tk.Tk):
             self.MasterPane.forget(self.CaseViewer)
             # and update DB.
             bcamp_api.update_config('ui_render_caseviewer', "False")
+
+    def toggle_CaseViewer_search(self, event=None):
+        '''
+        Button and Keyboard Bind command to toggle the CaseViewer Pane, on the
+        left of the UI.
+        '''
+        if bcamp_api.get_config('ui_render_caseviewer_search') == "False":
+            # Update DB first as CaseViewer method reads from DB only.
+            bcamp_api.update_config('ui_render_caseviewer_search', "True")
+            # Last setting was "hidden" - Render Caseviewer Search...
+            self.CaseViewer.update_search_pos()
+
+        elif bcamp_api.get_config('ui_render_caseviewer_search') == "True":
+            # Update DB first as CaseViewer method reads from DB only.
+            bcamp_api.update_config('ui_render_caseviewer_search', "False")
+            # Last Setting was "shown" - Remove Caseviewer Search...
+            self.CaseViewer.update_search_pos()
 
     def toggle_top_menu(self, event=None):
         # Assigning top_menu to "master" Window
@@ -506,6 +538,15 @@ class Gui(tk.Tk):
             empty_menu = tk.Menu(self)
             self.config(menu=empty_menu)
             bcamp_api.update_config('ui_render_top_menu', "False")
+
+    def toggle_favTree(self, event=None):
+        # Updates the DB value for "ui_render_favtree"
+        if bcamp_api.get_config("ui_render_favtree") == "False":
+            bcamp_api.update_config('ui_render_favtree', "True")
+            Gui.fb_showfavtree.value = "True"
+        else:
+            bcamp_api.update_config('ui_render_favtree', "False")
+            Gui.fb_showfavtree.value = "False"
 
     def export_cases_backup(self, event=None):
         '''
@@ -559,13 +600,26 @@ class Gui(tk.Tk):
             title="Basecamp - Select Cases Backup File",
         )
         imported_dataset = pickle.load(target_file)
-        print("\n\nimport>>")
-        print(imported_dataset)
 
         # Iterating through backup to generate values into DB.
+        total_cnt = 0
+        for sr_set in imported_dataset:
+            total_cnt += 1
+        print("\nBasecamp_restore: Total to import = ", total_cnt, "\n")        
+
         for sr_set in imported_dataset:
             self.import_handler(sr_set)
 
+    def make_fullscreen(self, event=None):
+        '''
+        Makes the root TK window fullscreen.
+        '''
+        if self.w_fullscreen == False:
+            self.w_fullscreen = True
+            self.attributes('-fullscreen', True)
+        elif self.w_fullscreen == True:
+            self.w_fullscreen = False
+            self.attributes('-fullscreen', False)
 
     # DB & Config Integration Methods
     def import_handler(self, new_import_data):
@@ -597,8 +651,13 @@ class Gui(tk.Tk):
         # SR Numbers are 13 characters long.
         if len(import_key_value) == 13:
             if not bcamp_api.query_case_exist(import_key_value):
-                bcamp_api.new_import(new_import_data)
-                self.CaseViewer.update_CaseViewer_tiles()
+                bcamp_api.new_import(new_import_data, self.file_queue)
+                # Refresh CaseTiles based on Filtered Tag.
+                if self.CaseViewer.isFiltered:
+                    self.CaseViewer.refresh_cur_casetiles()
+                elif self.CaseViewer.isFiltered == False:
+                    self.CaseViewer.get_all_casetiles()
+
                 #self.Workbench.render_workspace(import_key_value)
                 # Create local 'downloads' folder.
                 try:
@@ -611,90 +670,10 @@ class Gui(tk.Tk):
                 #self.Workbench.render_workspace(import_key_value)
 
     # UI Callbacks
-    def update_fb_prog(self, new_fileops_val):
-        '''
-        Callback method whenever *Gui.fb_progress_val* var is modified.
 
-        Parses the 'new_fileops_val' dictionary which contains a default
-        'mode' value, and any other info provided from the API scripts
-        for progress string formatting, which is done here!
-
-        All Tk-Filebrowser instances will read the Gui.fb_progress_string
-        updated by this class.
-        '''
-        def calc_percentage(cursize, totalsize):
-            # Converts Totalsize/cursize to a rounded percentage.
-            raw_percent = cursize / totalsize
-            formated_percent = "{:.0%}".format(raw_percent)
-            return formated_percent
-
-        if new_fileops_val['mode'] == None:
-            # Set when reset by FileOps Worker Thread
-            Gui.fb_progress_string.value = ""
-            
-        if new_fileops_val['mode'] == 'download':
-            # convert bytes to kB
-            cur_kb = new_fileops_val['curbytes'] / 100
-            total_kb = new_fileops_val['totalbytes'] / 100
-            # Get percentage
-            prog_percentage = calc_percentage(cur_kb, total_kb)
-            # Get name and sr
-            fname = os.path.basename(new_fileops_val['srcpath'])
-            sr = new_fileops_val['sr']
-            formatted_string = (
-                "DOWNLOADING "
-                + "[" 
-                + prog_percentage 
-                + "] ./"
-                + sr
-                + "/" + fname
-
-            )
-            Gui.fb_progress_string.value = formatted_string
-
-        if new_fileops_val['mode'] == 'automation':
-            def progress_string(base_msg, dots):
-                # Simple method to generate automationing progress strings for UI.
-                Gui.fb_progress_string.value = base_msg + dots
-
-            # Base Message wth vars from *new_fileops_val* dictionary.
-            automation_path = new_fileops_val['srcpath']
-            automation_sr = new_fileops_val['sr']
-
-            # TODO - Complete base MSG? 
-            #base_msg = "automationing"
-
-
-            fname = os.path.basename(new_fileops_val['srcpath'])
-            sr = new_fileops_val['sr']
-            base_msg = (
-                "AUTOMATION - "
-                + sr
-                + "/" + fname
-
-            )
-
-            # Checking if 'automation' already complete since recursive call.
-            if Gui.fb_progress_val.value['mode'] == 'automation':
-                # Modify progress string with *self.after* - measured in ms
-                Gui.fb_progress_string.value = base_msg
-                self.after(1000, progress_string, base_msg, ".")
-                self.after(2000, progress_string, base_msg, "..")
-                self.after(3000, progress_string, base_msg, "...")
-
-            # Recursive Call back to *self* with og new_fileops_val to loop
-            # the progress dots.
-            if Gui.fb_progress_val.value['mode'] == 'automation' and Gui.fb_progress_val.value['srcpath'] == automation_path:
-                self.after(4000, self.update_fb_prog, new_fileops_val)
-            else:
-                # Jobs Done! - *Gui.fb_progress_val* cleared by FileopsQueue.
-                # Manually clearing here so we dont have to wait for the 
-                # threads to sync.
-                Gui.fb_progress_string.value = ""
-                
 
 '''Sub-classed Tk/TcL Classes with Custom behavior for use in UI.'''
-class CustomTk_ButtonHover(ttk.Button):
+class CustomTk_ButtonHover(tk.Button):
     def __init__(self, master, **kw):
         tk.Button.__init__(self, master=master, **kw)
         self.defaultBackground = self["background"]
@@ -890,6 +869,8 @@ class CustomTk_ScrolledFrame(tk.Frame):
         self._vertical_bar = ttk.Scrollbar(self, orient='vertical', command=self._canvas.yview)
         if vertical:
             self._vertical_bar.grid(row=0, column=1, sticky='ns')
+            # Hiding bar by default.
+            self._vertical_bar.grid_forget()
         self._canvas.configure(yscrollcommand=self._vertical_bar.set)
 
         # create bottom scrollbar and connect to canvas X
@@ -928,12 +909,18 @@ class CustomTk_ScrolledFrame(tk.Frame):
         # resize inner frame to canvas size
         if self.resize_width:
             self._canvas.itemconfig("inner", width=event.width)
-            if (self._canvas.yview())[1] == 1:
-                self._vertical_bar.grid_forget()
-            else:
-                self._vertical_bar.grid(row=0, column=1, sticky='ns')
+            self.check_scrollbar_render()
         if self.resize_height:
             self._canvas.itemconfig("inner", height=event.height)
+
+    def check_scrollbar_render(self, event=None):
+        if (self._canvas.yview())[1] == 1:
+            self._vertical_bar.grid_forget()
+        else:
+            self._vertical_bar.grid(row=0, column=1, sticky='ns')
+
+    def hide_scrollbar(self, event=None):
+        self._vertical_bar.grid_forget()
 
 
 class CustomTk_BaseTextEditor(tk.Frame):
@@ -966,9 +953,9 @@ class CustomTk_BaseTextEditor(tk.Frame):
 
         # Setting Fonts for text_box.
         self.def_font = tk_font.Font(
-            family="Consolas", size=10, weight="normal", slant="roman")
+            family="Segoe UI", size=10, weight="normal", slant="roman")
         self.text_font = tk_font.Font(
-            family="Consolas", size=12, weight="normal", slant="roman")
+            family="Segoe UI", size=12, weight="normal", slant="roman")
         
         #TK Methods
         self.config_widgets()
@@ -1194,11 +1181,11 @@ class CustomTk_BaseTextEditor(tk.Frame):
             self.act300 = "#D5A336"
 
             self.sr_font = tk_font.Font(
-                family="Consolas", size=14, weight="bold", slant="roman")
+                family="Segoe UI", size=14, weight="bold", slant="roman")
             self.mini_font = tk_font.Font(
-                family="Consolas", size=8, weight="bold", slant="italic")
+                family="Segoe UI", size=8, weight="bold", slant="italic")
             self.sub_font = tk_font.Font(
-                family="Consolas", size=10, weight="normal", slant="roman")
+                family="Segoe UI", size=10, weight="normal", slant="roman")
 
             # ONLY for frames. 
             #self.wm_overrideredirect(True) # Hide windows title_bar
@@ -1367,8 +1354,8 @@ class Tk_RootPane(tk.PanedWindow):
         self.configure(
             handlesize=16,
             handlepad=100,
-            sashwidth=10,
-            background="#141414"
+            sashwidth=2,
+            background="#101010"
         )
 
 
@@ -1378,22 +1365,61 @@ class Tk_CaseViewer(tk.Frame):
     sources data from the local SQLite basecamp.db file and renders the Tiles
     using the "CaseTile_Template" Subclass for reference.
     '''
-    def __init__(self, master, workspace_manager):
+    def __init__(self, master, workspace_manager, Gui):
         super().__init__(master)
         # For starting new tabs in Workspace
         self.workspace_man = workspace_manager
+        self.master = master
+        self.Gui = Gui
         self.frame_state = "on"
         self.RPATH = str(pathlib.Path(
             __file__).parent.absolute()).rpartition('\\')[0]
-        
-        self.configure(background="#090B13")
+        self.sel_case_tab = None
+        self.isFiltered = False # Flag if we render all or cur tiles.
+
+        # Current Index List for CaseTiles when the Tiles must be updated 
+        # but we do not want All CaseTiles to be rendered. This is a callback
+        # variable that should be passed a 'tile_index' list in the expected 
+        # format
+        self.cur_casetiles = bcamp_api.callbackVar()
+        self.cur_casetiles.register_callback(self.render_casetiles_widgets)
+
+        # Search/Filter Vars
+        self.default_search_str = "(Search/Filter Cases)"
+        self.search_strVar = tk.StringVar()
+        self.search_strVar.set(self.default_search_str)
+        self.filtertiles_obj = []
+        self.cur_filterset = bcamp_api.callbackVar()
+        self.cur_filterset.value = {
+                    'account': [],
+                    'product': [],
+                    'tag': [],
+                    'custom': []
+            }
+        self.cur_filterset.register_callback(self.update_filters)
+
         self.config_widgets()
         self.config_grid()
-        #self.config_bindings()
-        # Draw Current tiles on init...
-        self.update_CaseViewer_tiles()
+        self.config_bindings()
+        
+        # Draw ALL CaseTiles on init...
+        self.get_all_casetiles()
 
     def config_widgets(self):
+        # Font Config
+        self.def_font = tk_font.Font(
+            family="Segoe UI", size=11, weight="normal", slant="roman")
+        self.bold_font = tk_font.Font(
+            family="Segoe UI", size=11, weight="bold", slant="roman")
+        self.sym_font = tk_font.Font(
+            family="Consolas", size=12, weight="bold", slant="roman")
+        
+        # Colors
+        self.base_bg = "#141414"
+
+        self.configure(
+            bg=self.base_bg
+        )
         # Creating Canvas widget to contain the Case Tiles, enabling a
         # scrollbar if the user has a lot of cases imported.
         self.master_frame = CustomTk_ScrolledFrame(
@@ -1402,55 +1428,498 @@ class Tk_CaseViewer(tk.Frame):
         self.master_frame.resize_width = True # Enable resize of inner canvas
         self.master_frame.resize_height = False
         self.master_frame._canvas.configure(
-            background="#090B13"
+            background="#141414"
         )
         self.master_frame.inner.configure(
-            background="#090B13"
+            background="#141414"
+        )
+
+        # Defining search frame at the bottom of the CaseViewer Window to
+        # filter shown CaseTiles.
+        self.search_frame = tk.Frame(
+            self,
+            bg='#3B3C35'
+        )
+        self.search_entry = tk.Entry(
+            self.search_frame,
+            textvariable=self.search_strVar,
+            bg="#101010",
+            fg="#8B9798",
+            insertbackground="#8B9798",
+            justify='center',
+            relief='flat',
+            font=self.def_font
+        )
+        self.search_run_btn = tk.Button(
+            self.search_frame,
+            text=">",
+            bg="#3B3C35",
+            fg="#FFFFFF",
+            relief='flat',
+            font=self.bold_font,
+            command=self.run_search            
+        )
+        self.filter_subframe = tk.Frame(
+            self.search_frame,
+            bg='#3B3C35',
+            #bg='#404247'
         )
 
     def config_grid(self):
-        self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-        #self.master_frame.rowconfigure(0, weight=1),
-        #self.master_frame.columnconfigure(0, weight=1)
-        self.master_frame.grid(row=0, column=0, sticky="nsew")
-        #self.master_frame.inner.grid(sticky="nsew")
-        #self.master_frame.inner.rowconfigure(0, weight=1),
-        #self.master_frame.inner.columnconfigure(0, weight=1)        
+        
+        # Check DB for Search Location to render Master frame and Search Frame
+        if bcamp_api.get_config('ui_render_caseviewer_search') == 'True':
+            if bcamp_api.get_config('ui_caseviewer_search_location') == 'top':
+                # Allow Row 1 to stretch for Master Frame.
+                self.rowconfigure(0, weight=0)
+                self.rowconfigure(1, weight=1)
+                self.search_frame.grid(row=0, column=0, pady=3, padx=2, sticky="nsew")
+                self.master_frame.grid(row=1, column=0, sticky="nsew")
+            elif bcamp_api.get_config('ui_caseviewer_search_location') == 'bottom':
+                # Allow Row 0 to stetch for Master Frame.
+                self.rowconfigure(0, weight=1)
+                self.rowconfigure(1, weight=0)
+                self.master_frame.grid(row=0, column=0, sticky="nsew")
+                self.search_frame.grid(row=1, column=0, pady=3, padx=2, sticky="nsew") 
+        elif bcamp_api.get_config('ui_render_caseviewer_search') == 'False':      
+            # Allow Row 0 to stetch for Master Frame.
+            self.rowconfigure(0, weight=1)
+            self.rowconfigure(1, weight=0)
+            self.master_frame.grid(row=0, column=0, sticky="nsew") 
+            self.search_frame.grid_remove()
+        
+        # Search Frame widgets
+        self.search_frame.rowconfigure(0, weight=1)
+        self.search_frame.rowconfigure(2, weight=1)
+        self.search_frame.columnconfigure(0, weight=1)
+        #self.search_label.grid(row=0, column=0, sticky="nsw")
+        self.search_entry.grid(row=1, column=0, pady=2, padx=2, sticky="nsew")
+        self.search_run_btn.grid(row=1, column=1, pady=2, padx=2, sticky="nse")
+        self.filter_subframe.grid(row=2, column=0, columnspan=2, sticky="nsew")
+        self.filter_subframe.rowconfigure(0, weight=1)
 
-    def update_CaseViewer_tiles(self, *refresh_caller):
-        '''
-        This method appends new "key_values" to the UI's CaseViewer found
-        in the collapsable left window. Ran at runtime, and when a new import occurs.
-        '''
-        sr_tuple = bcamp_api.query_cases("sr_number")
-        max_index = len(sr_tuple) - 1 #offset for loop
-        start_index = 0
-        while start_index <= max_index:
-            if sr_tuple[start_index][0] not in Gui.CaseViewer_index:
-                try:
-                    # Creating record...
-                    record = (len(Gui.CaseViewer_index), sr_tuple[start_index][0], False)
-                    # appending it to CaseViewer_index
-                    Gui.CaseViewer_index.append(record)
-                    # Passing sr_number to render_tile method
-                    self.render_tile(sr_tuple[start_index][0])
-                except tk.TclError as e:  # Thrown for dupes...
-                    print(e)
-                    pass
-            # increase index counter
-            start_index += 1
+    def config_bindings(self):
+        self.search_entry.bind("<FocusIn>", self.clear_search_entry)
+        self.search_entry.bind("<FocusOut>", self.reset_search_entry)
+        self.filter_subframe.bind("<Configure>", self.update_filtertiles_grid)
+        self.search_entry.bind("<Return>", self.run_search)
 
-    def render_tile(self, key_value):
+    # Casetiles Methods
+    def get_all_casetiles(self):
         '''
-        Creates a case_template Tk.Frame for 'key_value' based on the
-        global CaseViewer_index.
+        This method queries the DB for ALL cases imported, and updates the
+        classes 'self.cur_casetiles' variable in order of Pinned, then
+        Ascending order. Older cases will be at the TOP of the list.
+
+        db_case[0] : Format is used as DB returns -> [('4-11111111111',),(etc.)]
         '''
-        index = [item for item in Gui.CaseViewer_index if key_value in item]
-        self.CaseTile_template(self.master_frame.inner, index[0][0], key_value, self.workspace_man)
+        all_cases = bcamp_api.query_cases("sr_number")
+        # After, iterate through filtered_cases, checking if pinned and 
+        # compiling two lists that will be used to build the final result.
+        pinned_cases = []
+        reg_cases = []
+        for db_case in all_cases:
+            if bcamp_api.query_sr(db_case[0], 'pinned') == 1:
+                pinned_cases.append((db_case[0], True)) # Set w/ True for later.
+            else: # Case is not pinned.
+                reg_cases.append(db_case[0])
+        # Now to build the final result that will be used to redraw the Case 
+        # Tiles in the UI. Items in pinned cases will be first so they render
+        # at the top of the List!
+        for case in reg_cases:
+            pinned_cases.append((case, False))
+
+        # Pinned_cases now contains a combined list of case sets which we will
+        # iterate through in order to determine CaseTile order in UI (Asc.)
+        #
+        # [Expected format]
+        #   [(index int, case_number, pinned bool), (etc.)] 
+        final_index_lst = []
+        index_cnt = 0
+        for case in pinned_cases: #('sr', bool')
+            if case[1] == True:
+                case_set = (index_cnt, case[0], case[1])
+            elif case[1] == False:
+                case_set = (index_cnt, case[0], case[1])
+            final_index_lst.append(case_set)
+            index_cnt += 1
+
+        # Return results to 'self.cur_casetiles.value'
+        self.cur_casetiles.value = final_index_lst
+
+    def refresh_cur_casetiles(self):
+        '''
+        Convience method to redraw the current CaseTiles without changing the 
+        self.cur_casetiles value set but updating the order based on pinned.
+        '''
+        print("CaseViewer: Refreshing currently drawn CaseTiles.")
+        cur_val = self.cur_casetiles.value
+
+        # Check for any items that may have been pinned since the last call.
+        # Because the order will need to change.
+        case_lst = []
+        for item in cur_val:
+            case_lst.append(item[1])
+        new_index = self.build_casetiles_index(case_lst)
+
+        # Trigger redraw with new index.
+        self.cur_casetiles.value = new_index
+
+    def build_casetiles_index(self, case_list):
+        '''
+        Returns a casetiles_index in order based on Pinned vals
+        '''
+        # After, iterate through filtered_cases, checking if pinned and 
+        # compiling two lists that will be used to build the final result.
+        pinned_cases = []
+        reg_cases = []
+        for case in case_list:
+            if bcamp_api.query_sr(case, 'pinned') == 1:
+                pinned_cases.append((case, True)) # Set w/ True for later.
+            else: # Case is not pinned.
+                reg_cases.append(case)
+        # Now to build the final result that will be used to redraw the Case 
+        # Tiles in the UI. Items in pinned cases will be first so they render
+        # at the top of the List!
+        for case in reg_cases:
+            pinned_cases.append((case, False))
+
+        # Pinned_cases now contains a combined list of case sets which we will
+        # iterate through in order to determine CaseTile order in UI (Asc.)
+        #
+        # [Expected format]
+        #   [(index int, case_number, pinned bool), (etc.)] 
+        final_index_lst = []
+        index_cnt = 0
+        for case in pinned_cases: #('sr', bool')
+            if case[1] == True:
+                case_set = (index_cnt, case[0], case[1])
+            elif case[1] == False:
+                case_set = (index_cnt, case[0], case[1])
+            final_index_lst.append(case_set)
+            index_cnt += 1
+        
+        return final_index_lst
+
+    def render_casetiles_widgets(self, casetile_index):
+            '''
+            Clears all tiles from Caseviewer pane, and redraws new tiles based on
+            the 'casetile_index' value. This method is registered as to the 
+            classes 'self.cur_casetiles' var, meaning every time the 
+            'self.cur_casetiles.value' is changed, it is passed to this method
+            as 'casetile_index'
+            '''
+            print("CaseViewer: Rendering CaseTiles to UI!")
+            # First, destory all previous tiles to release memory
+            for wchild in self.master_frame.inner.winfo_children():
+                wchild.destroy()
+            
+            # Iterate through index_list to render tiles. pinned_bool omited as DB
+            # will be quried to get this value in the template class.
+            for tile_set in casetile_index: #(index int, case_number, pinned bool) 
+                self.CaseTile_template(
+                    self.master_frame.inner,
+                    tile_set[0],
+                    tile_set[1],
+                    self.workspace_man, 
+                    self
+                    )
+            
+            self.master_frame.update_idletasks()
+            self.master_frame.check_scrollbar_render()
+
+    # Search Frame Methods.
+    def clear_search_entry(self, event=None):
+        # Clear Text if default and change entry color.
+        if self.search_strVar.get() == self.default_search_str:
+            self.search_strVar.set("")
+        self.search_entry['justify'] = 'left'
+        self.search_entry['fg'] = "#D0E2E4"
+
+    def reset_search_entry(self, event=None):
+        # Add Text only if empty and change entry Color
+        if self.search_strVar.get() == "":
+            self.search_strVar.set(self.default_search_str)
+            self.search_entry['justify'] = 'center'
+        self.search_entry['fg'] = "#8B9798"
+
+    def update_search_pos(self, event=None):
+        '''
+        Method called from the main Gui class to update the Search frame view
+        within the CaseViewer. The should be DB is updated BEFORE this method
+        is called.
+        '''
+        if bcamp_api.get_config('ui_render_caseviewer_search') == "True":
+            if bcamp_api.get_config('ui_caseviewer_search_location') == 'top':
+                # Allow Row 1 to stretch for Master Frame.
+                self.rowconfigure(0, weight=0)
+                self.rowconfigure(1, weight=1)
+                self.search_frame.grid(row=0, column=0, pady=3, padx=2, sticky="sew")
+                self.master_frame.grid(row=1, column=0, sticky="nsew")
+            elif bcamp_api.get_config('ui_caseviewer_search_location') == 'bottom':
+                # Allow Row 0 to stetch for Master Frame.
+                self.rowconfigure(0, weight=1)
+                self.rowconfigure(1, weight=0)
+                self.master_frame.grid(row=0, column=0, sticky="nsew")
+                self.search_frame.grid(row=1, column=0, pady=3, padx=2, sticky="sew")       
+
+        elif bcamp_api.get_config('ui_render_caseviewer_search') == "False":
+            # Last Setting was "shown" - Remove Caseviewer Search...
+            self.search_frame.grid_remove()
+            # And render master_frame
+            self.rowconfigure(0, weight=1)
+            self.rowconfigure(1, weight=0)
+            self.master_frame.grid(row=0, column=0, sticky="nsew")
+
+    def run_search(self, event=None):
+        '''
+        Intialization method to read the user-defined query and return a new
+        Caseviewer tileset based on the parameters. This method calls the API 
+        to search through the DB to compile the returned list and then updates
+        the Class' self.cur_casetiles - triggering the actual render of
+        casetiles in the UI
+        '''
+        # First, get raw string from Entry...
+        ui_query = self.search_strVar.get()
+        # And Clear text from entry widget.
+        self.search_strVar.set("")
+
+        # Second, parse the raw string from the UI using the API. The returned
+        # value already contains exisiting rules.
+        if self.cur_filterset.value == "":
+            filterset = {
+                'account': [],
+                'product': [],
+                'tag': [],
+                'custom': []
+            }
+        elif self.cur_filterset.value != "":
+            filterset = self.cur_filterset.value
+
+        new_filterset = bcamp_api.parse_filter_search(ui_query, filterset)
+
+        # Third, Update the 'cur_filterset.value' to trigger the callback
+        # sent to the 'update_filters' method.
+        self.cur_filterset.value = new_filterset
+
+    ## Search/Filter Tiles Methods
+    def update_filters(self, new_filterset):
+        '''
+        A callback method ran everytime the self.cur_filterset.value is 
+        updated. This method is responsible for...
+
+        1 - Creating the new filtertile widgets based on the 'new_filterset'
+        2 - Resetting the CaseViewer when all filters are removed.
+        3 - Querying the DB to get the returned list of CaseTiles based on filters.
+        4 - Updating the CaseViewer tiles based on returned list from DB.
+
+        The expected format for the filterset is...
+
+            {
+               'account':['str',],
+               'product':['str',],
+               'tag':['str',],
+               'custom':['str',] 
+            }
+        '''
+
+        # First - Create the filtertiles based on the self.cur_fileset
+        self.create_filtertiles(new_filterset)
+
+        # Second, actually search the DB using the API method, and return a
+        # list of cases that match the defined filters.
+        filtered_cases = bcamp_api.search_cases(new_filterset)
+
+        # Finally, Update the CaseTiles based on the returned cases.
+        self.cur_casetiles.value = self.build_casetiles_index(filtered_cases)
+
+    def create_filtertiles(self, new_filterset):
+        '''
+        Destroys all previous filter-tile widgets for the search function and
+        redraws based on the query_set var.
+        '''
+        # Destory ALL THE THINGS (widgets)
+        for widget in self.filter_subframe.winfo_children():
+            widget.destroy()
+            self.filter_subframe.update_idletasks()
+        
+        # Widget List for smart_grid later.
+        widget_list = []
+        # Create the FilterTiles based on 'new_filterset'
+        account_lst = new_filterset['account']
+        product_lst = new_filterset['product']
+        tag_lst = new_filterset['tag']
+        custom_lst = new_filterset['custom']
+
+        ## Building account filter widgets...
+        for item in account_lst:
+            filter_tkObj = self.FilterTile_template(
+                self.filter_subframe,
+                'account', 
+                item,
+                self
+                )
+            widget_list.append(filter_tkObj)
+
+        ## Building product filter widgets...
+        for item in product_lst:
+            filter_tkObj = self.FilterTile_template(
+                self.filter_subframe,
+                'product', 
+                item,
+                self
+                )
+            widget_list.append(filter_tkObj)    
+
+        ## Building tag filter widgets...
+        for item in tag_lst:
+            filter_tkObj = self.FilterTile_template(
+                self.filter_subframe,
+                'tag', 
+                item,
+                self
+                )
+            widget_list.append(filter_tkObj)    
+
+        ## Building custom filter widgets...
+        for item in custom_lst:
+            filter_tkObj = self.FilterTile_template(
+                self.filter_subframe,
+                'custom', 
+                item,
+                self
+                )
+            widget_list.append(filter_tkObj)    
+        
+        # Update filterfiles_obj list
+        self.filtertiles_obj = widget_list
+        # And render sub_frame.
+        self.filter_subframe.grid()
+        self.update_filtertiles_grid()
+        
+    def update_filtertiles_grid(self, event=None):
+        '''
+        Method responsible for controlling FilterTile Geometry.
+        '''
+        bcamp_api.smart_grid(self.filter_subframe, *self.filtertiles_obj, pady=3, padx=3)
+    
+    def remove_filtertile(self, target_widget, f_type, f_string):
+        '''
+        Called when a user hits the remove button on a filtertile widget. 
+        Updates the 'filtertiles_obj' list and calls the 
+        '''
+        self.isFiltered = True
+        # Removing widget from TK list.
+        if target_widget in self.filtertiles_obj:
+            temp_lst = self.filtertiles_obj
+            temp_lst.remove(target_widget)
+            self.filtertiles_obj = temp_lst
+        
+        # And removing filter from self.cur_filterset.
+        new_f_set = self.cur_filterset.value
+        removal_index = new_f_set[f_type].index(f_string)
+        del new_f_set[f_type][removal_index]
+        self.cur_filterset.value = new_f_set
+
+        # Check if last widget was removed (i.e empty list.)
+        if self.filtertiles_obj == []:
+            self.reset_filtertiles()
+
+    def reset_filtertiles(self):
+        '''
+        Called when there are no more filtertiles, this method hides the 
+        'filtertile sub-frame' in the UI, and resets the filter allowing all
+        cases to be shown again!
+        '''
+        self.isFiltered = False
+        print("$reset_filtetiles called!")
+        # First, hide the sub_frame.
+        self.filter_subframe.grid_remove()
+        # And redraw ALL imported cases as no more filters are present.
+        self.get_all_casetiles()
 
 
-    #TK Definitions for CaseTile
+    #TK Definitions for CaseTile and Filter Tile Widgets
+    class FilterTile_template(tk.Frame):
+        '''
+        Template for the filter widgets that appear after a query is ran in 
+        search
+        '''
+        def __init__(self, parent_frame, f_type, f_string, CaseViewer):
+            super().__init__(master=parent_frame)
+            self.master = parent_frame
+            self.f_type = f_type
+            self.f_string = f_string
+            self.CaseViewer = CaseViewer
+            self.config_theme()
+            self.config_widgets()
+            self.config_grid()
+        
+        def config_widgets(self):
+            self.config(
+                bg=self.bg_col
+            )
+            self.f_string_label = tk.Label(
+                self,
+                text=self.f_string,
+                bg=self.bg_col,
+                fg=self.fg_col,
+                font=self.def_font_bld
+            )
+            self.del_button = CustomTk_ButtonHover(
+                self,
+                text="X",
+                bg=self.bg_col,
+                fg=self.fg_col,
+                relief='flat',
+                command=self.remove_item,
+                font=self.def_font,
+                activebackground="#F92672"
+            )
+        
+        def config_grid(self):
+            self.f_string_label.grid(row=0, column=0)
+            self.del_button.grid(row=0, column=1)
+
+        def config_theme(self):
+            '''
+            Should be called BEFORE config_widgets. Defines theme details
+            based on 'f_type'.
+            '''
+            ## DEFINE FONTS
+            self.def_font = tk_font.Font(
+                family="Segoe UI", size=10, weight="normal", slant="roman")
+            self.def_font_bld = tk_font.Font(
+                family="Segoe UI", size=10, weight="bold", slant="roman")
+
+            ## DEFINE COLORS 
+            if self.f_type == "product":
+                self.bg_col = "#66D9E2"
+                self.fg_col = "#1E1F21"
+
+            if self.f_type == "account":
+                self.bg_col = "#A6E22E"  
+                self.fg_col = "#1E1F21"
+
+            if self.f_type == "tag":
+                self.bg_col = "#FD7C29"
+                self.fg_col = "#1E1F21"
+
+            if self.f_type == "custom":
+                self.bg_col = "#E6CD4A"
+                self.fg_col = "#1E1F21"       
+
+        def remove_item(self):
+            '''
+            Deletes the filter from the UI, and updates the filter parameters
+            '''
+            # Remove widget
+            self.destroy()
+            # Then call the CaseViewer 'remove_filtertile' method.
+            self.CaseViewer.remove_filtertile(self, self.f_type, self.f_string)
+
+
     class CaseTile_template(tk.Frame):
         '''
         Template for each "Case Tab" in CaseViewer
@@ -1458,28 +1927,22 @@ class Tk_CaseViewer(tk.Frame):
         index_num determines the tk.Grid placement for this template. This
         is the value determines what is shown (>0) and in what order (0-X)
         '''
-        def __init__(self, master, index_num, key_value, workspace_man):
+        def __init__(self, master, index_num, key_value, workspace_man, CaseViewer):
             super().__init__()
             self.master = master
             self.index_num = index_num
             self.key_value = key_value
             self.workspace_man = workspace_man
+            self.CaseViewer = CaseViewer
             self.RPATH = str(pathlib.Path(
                 __file__).parent.absolute()).rpartition('\\')[0]
             
-            # Font Config
-            self.sr_font = tk_font.Font(
-                family="Consolas", size=14, weight="bold", slant="roman")
-            self.mini_font = tk_font.Font(
-                family="Consolas", size=8, weight="bold", slant="italic")
-            self.sub_font = tk_font.Font(
-                family="Consolas", size=10, weight="normal", slant="roman")
-
             # Tk Vars
             self.sub_frame_state = tk.BooleanVar()
             self.sub_frame_state.set(False)
             self.sr_id = self.key_value
             self.tag_obj_list = []
+            self.sr_var = tk.StringVar()
             self.account_var = tk.StringVar()
             self.product_var = tk.StringVar()
             self.last_ran_var = tk.StringVar()
@@ -1498,9 +1961,7 @@ class Tk_CaseViewer(tk.Frame):
             self.product = self.sr_vals[4]
             self.account = self.sr_vals[5]
             self.bug_id = self.sr_vals[7]
-            # FUTURE IF NEEDED notes [6]
-            # FUTURE IF NEEDED workspace [8]
-            # FUTURE IF NEEDED files_table [9]
+
 
             # Determine if local path exist... for right click menu.
             if os.access(self.local_path, os.R_OK):
@@ -1509,22 +1970,7 @@ class Tk_CaseViewer(tk.Frame):
                 self.open_create_local_var.set("Create Local Folder")
             self.sr_remote_path.set(self.remote_path)
 
-            # Determine if SR is "important"... for right click menu.
-            if self.pinned == 1: # True/False NA in SQLite3
-                self.pin_unpin_var.set("Un-Pin SR")
-            else:
-                self.pin_unpin_var.set("Pin SR")
-
-            # Colors...
-            self.blk100 = "#EFF1F3"
-            self.blk300 = "#B2B6BC"
-            self.blk400 = "#717479"
-            self.blk500 = "#1E1F21" ##
-            self.blk600 = "#15171C"
-            self.blk700 = "#0F1117"
-            self.blk900 = "#05070F"
-            self.act300 = "#D5A336"
-
+            self.config_theme()
             self.config_widgets()
             self.config_grid()
             self.config_bindings()
@@ -1532,6 +1978,38 @@ class Tk_CaseViewer(tk.Frame):
             # Get tags, and pass to "render_tags" method.
             raw_tags = bcamp_api.query_tags(self.key_value)
             self.tag_tk_objs = self.render_tags(raw_tags)
+
+        def config_theme(self):
+            # Fonts
+            self.sr_font = tk_font.Font(
+                family="Segoe UI", size=15, weight="bold", slant="roman")
+            self.mini_font = tk_font.Font(
+                family="Segoe UI", size=9, weight="bold", slant="italic")
+            self.sub_font = tk_font.Font(
+                family="Segoe UI", size=11, weight="normal", slant="roman")
+            self.bold_sub_font = tk_font.Font(
+                family="Segoe UI", size=11, weight="bold", slant="roman")
+
+            # Colors...
+            self.blk100 = "#EFF1F3"
+            self.blk300 = "#B2B6BC"
+            #self.blk400 = "#717479"
+            self.blk400 = "#5E5E58"
+            #self.blk500 = "#1E1F21" ##
+            self.blk500 = "#1D1E19" ##
+            self.blk600 = "#10100B"
+            self.blk700 = "#0F1117"
+            self.blk900 = "#05070F"
+            self.act300 = "#66D9EF"
+            self.act2 = "#E6BB43"
+
+            ### "IMPORTANT/PINNED" SR Changes
+            if self.pinned == 1: # True/False NA in SQLite3
+                self.pin_unpin_var.set("Un-Pin SR")
+                self.sr_text_color = "#E6CD4A"
+            else:
+                self.pin_unpin_var.set("Pin SR")
+                self.sr_text_color = "#919288"
 
         def config_widgets(self):
             # Colors
@@ -1546,7 +2024,7 @@ class Tk_CaseViewer(tk.Frame):
                 anchor="center",
                 font=self.sr_font,
                 background=self.blk500,
-                foreground=self.blk300,
+                foreground=self.sr_text_color,
             )
             self.detail_frame = tk.Frame(
                 self.master_frame,
@@ -1558,7 +2036,8 @@ class Tk_CaseViewer(tk.Frame):
                 anchor="w",
                 font=self.mini_font,
                 background=self.blk500,
-                foreground=self.blk400
+                foreground=self.blk400,
+                cursor="hand2"    
             )
             self.product_label = tk.Label(
                 self.detail_frame,
@@ -1566,7 +2045,8 @@ class Tk_CaseViewer(tk.Frame):
                 anchor="w",
                 font=self.mini_font,
                 background=self.blk500,
-                foreground=self.act300
+                foreground=self.act300,
+                cursor="hand2"    
             )
             self.options_button = tk.Button(
                 self.master_frame,
@@ -1575,7 +2055,7 @@ class Tk_CaseViewer(tk.Frame):
                 relief='flat',
                 #font=self.sub_font,
                 background=self.blk500,
-                foreground=self.blk400,
+                foreground=self.blk500, # Start hidden.
                 cursor="hand2"      
             )
             self.dropdown_button = tk.Button(
@@ -1585,7 +2065,7 @@ class Tk_CaseViewer(tk.Frame):
                 relief='flat',
                 font=self.sub_font,
                 background=self.blk500,
-                foreground=self.blk400,
+                foreground=self.blk500, # Start hidden.
                 cursor="hand2"                
             )
             # Frame "drop_down" when expanded.
@@ -1616,8 +2096,9 @@ class Tk_CaseViewer(tk.Frame):
                 self.sub_frame,
                 textvariable=self.bug_var,
                 background=self.blk600,
-                foreground="yellow",
+                foreground=self.act2,
                 relief='flat',
+                font=self.sub_font,
                 command=self.launch_jira_browser
             )
             self.last_ran_label = tk.Label(
@@ -1765,15 +2246,30 @@ class Tk_CaseViewer(tk.Frame):
             self.sr_label.bind('<Shift-Button-1>', self.render_sub_frame)
             self.product_label.bind('<Shift-Button-1>', self.render_sub_frame)
             self.account_label.bind('<Shift-Button-1>', self.render_sub_frame)
+
+            # Right Click_menu
             self.master_frame.bind('<Button-3>', self.draw_menu)
             self.sr_label.bind('<Button-3>', self.draw_menu)
             self.product_label.bind('<Button-3>', self.draw_menu)
             self.account_label.bind('<Button-3>', self.draw_menu)
-            self.tags_frame.bind('<Configure>', self.update_tag_grid)
+
+            # Open Workspace
             self.master_frame.bind('<Double-1>', self.right_click_open)
             self.sr_label.bind('<Double-1>', self.right_click_open)
-            self.product_label.bind('<Double-1>', self.right_click_open)
-            self.account_label.bind('<Double-1>', self.right_click_open)
+
+            # Filter By...
+            self.product_label.bind('<Button-1>', self.product_clicked)
+            self.account_label.bind('<Button-1>', self.account_clicked)
+
+            # Show Options, Buttons
+            self.master_frame.bind("<Enter>", self.show_tile_buttons)
+            self.master_frame.bind("<Leave>", self.hide_tile_buttons)
+
+            # Reside Tag_frame on configure (Resize)
+            self.tags_frame.bind('<Configure>', self.update_tag_grid)
+
+
+
 
             # LEGACY - Hover Dropdown Binds for *sub_frame*
                 #self.master_frame.bind('<Enter>', self.enter_sub_frame)
@@ -1811,11 +2307,13 @@ class Tk_CaseViewer(tk.Frame):
             self.bug_var.set(new_bug)
             if self.bug_var.get() != "None":
                 self.bug_button.configure(
-                    cursor='hand2'
+                    cursor='hand2',
+                    font=self.bold_sub_font
                 )
             else:
                 self.bug_button.configure(
-                    state=tk.DISABLED
+                    state=tk.DISABLED,
+                    font=self.sub_font
                 )
 
             # Formatting Time Vals from DB.
@@ -1831,7 +2329,7 @@ class Tk_CaseViewer(tk.Frame):
                 self.open_create_local_var.set("Open Local Folder")
             else:
                 self.open_create_local_var.set("Create Local Folder")
-            self.sr_remote_path.set(new_remote_path)
+
             # Determine if SR is "important"
             if self.pinned_state == 1:
                 self.pin_unpin_var.set("Un-Pin SR")
@@ -1876,7 +2374,7 @@ class Tk_CaseViewer(tk.Frame):
 
         def update_tag_grid(self, event=None):
             '''
-            NOT HERE
+            Renders the tags based on the current tag_frame dimensions.
             '''
             self.tags_frame.update_idletasks()
             self.smart_grid(self.tags_frame, *self.tag_tk_objs, pady=1, padx=3)
@@ -1907,9 +2405,49 @@ class Tk_CaseViewer(tk.Frame):
                     col += columns
                 parent.update_idletasks() # update() # 
                 return row + 1
-                    
+
+        def show_tile_buttons(self, event=None):
+            '''
+            Changes the color of the Option/dropdown widgets so they can be 
+            seen ONLY when moused over.
+            '''
+            self.options_button['fg'] = self.blk400
+            self.dropdown_button['fg'] = self.blk400
+
+        def hide_tile_buttons(self, event=None):
+            '''
+            Changes the color of the option/dropdown widgets to the bg color.
+            '''
+            self.options_button['fg'] = self.blk500
+            self.dropdown_button['fg'] = self.blk500
+
+
         def tag_clicked(self, event):
-            print("you clicked", (event.widget).cget('text'))
+            # Get Widget text
+            selected_tag = (event.widget).cget('text')
+            # Add to temp 'new_set' val.
+            new_set = self.CaseViewer.cur_filterset.value
+            new_set['tag'].append(selected_tag)
+            # Update CaseViewer FilterSet.
+            self.CaseViewer.cur_filterset.value = new_set
+
+        def product_clicked(self, event):
+            # Get Widget text
+            selected_tag = (event.widget).cget('text')
+            # Add to temp 'new_set' val.
+            new_set = self.CaseViewer.cur_filterset.value
+            new_set['product'].append(selected_tag)
+            # Update CaseViewer FilterSet.
+            self.CaseViewer.cur_filterset.value = new_set
+            
+        def account_clicked(self, event):
+            # Get Widget text
+            selected_tag = (event.widget).cget('text')
+            # Add to temp 'new_set' val.
+            new_set = self.CaseViewer.cur_filterset.value
+            new_set['account'].append(selected_tag)
+            # Update CaseViewer FilterSet.
+            self.CaseViewer.cur_filterset.value = new_set
 
         # LEGACY - Hover Dropdown Methods for *sub_frame*: Future user option?
         def enter_sub_frame(self, event=None):
@@ -1994,6 +2532,8 @@ class Tk_CaseViewer(tk.Frame):
                 self.pin_unpin_var.set("Un-Pin SR")
                 bcamp_api.update_sr(self.key_value, 'pinned', 1)
             self.right_click_menu.update_idletasks()
+            # Callback to Caseveiwer to redraw tiles.
+            self.CaseViewer.refresh_cur_casetiles()
 
         def right_click_copy_sr(self, event=None):
             threading.Thread(target=bcamp_api.to_win_clipboard,
@@ -2031,7 +2571,7 @@ class Tk_CaseViewer(tk.Frame):
             x = self.master_frame.winfo_rootx()
             y = self.master_frame.winfo_rooty()
             frame_w = self.master_frame.winfo_width()
-            edit_menu = Tk_EditCaseMenu(self.key_value)
+            edit_menu = Tk_EditCaseMenu(self.key_value, self.CaseViewer)
             edit_menu.update_idletasks()
             w = edit_menu.winfo_width()
             h = edit_menu.winfo_height()
@@ -2080,10 +2620,8 @@ class Tk_CaseViewer(tk.Frame):
                 self.fg = fg_color
                 # Setting font for widget...
 
-
-                #%%f
                 self.def_font = tk_font.Font(
-                    family="Consolas", size=10, weight="normal", slant="roman")
+                    family="Segoe UI", size=10, weight="normal", slant="roman")
 
                 # Calling methods
                 self.config_widgets()
@@ -2100,48 +2638,16 @@ class Tk_CaseViewer(tk.Frame):
                 )
                 self.bind("<Button-1>", self.tag_clicked)
                 self.tag_label.bind("<Button-1>", self.tag_clicked)
-            
-            #def config_grid(self):
-            #    self.tag_label.grid(row=self.row, column=self.index, padx=5, pady=2)
-
-            def tag_clicked(self, event=None):
-                print("you clicked :)", self.tag_id)
-
-            def smart_grid(parent, *args, **kwargs): # *args are the widgets!
-                divisions   = kwargs.pop('divisions', 100)
-                force_f     = kwargs.pop('force', False)
-                if 'sticky' not in kwargs:
-                    kwargs.update(sticky='w')
-                try:
-                    parent.win_width
-                except:
-                    parent.win_width = -1
-                winfo_width = parent.winfo_width()
-                if 1 < winfo_width != parent.win_width or force_f:
-                    parent.win_width = winfo_width
-                    row = col = width = 0
-                    argc = len(args)
-                    for i in range(argc):
-                        widget_width = args[i].winfo_width()
-                        columns = max(1, int(widget_width * float(divisions) / winfo_width))
-                        width += widget_width
-                        if width > winfo_width:
-                            width = widget_width
-                            row += 1
-                            col = 0
-                        args[i].grid(row=row, column=col, columnspan=columns, **kwargs)
-                        col += columns
-                    parent.update_idletasks() # update() # 
-                    return row + 1
 
 
 class Tk_EditCaseMenu(tk.Toplevel):
     '''
     Similar to the "ImportMenu" - but to edit exisiting Case records.
     '''
-    def __init__(self, key_value):
+    def __init__(self, key_value, CaseViewer):
         super().__init__()
         self.key_value = key_value
+        self.CaseViewer = CaseViewer
 
         #%%hex
         self.blk100 = "#EFF1F3"
@@ -2155,14 +2661,13 @@ class Tk_EditCaseMenu(tk.Toplevel):
 
         #%%f
         self.sr_font = tk_font.Font(
-            family="Consolas", size=14, weight="bold", slant="roman")
+            family="Segoe UI", size=14, weight="bold", slant="roman")
         self.mini_font = tk_font.Font(
-            family="Consolas", size=8, weight="bold", slant="italic")
+            family="Segoe UI", size=8, weight="bold", slant="italic")
         self.sub_font = tk_font.Font(
-            family="Consolas", size=10, weight="normal", slant="roman")
+            family="Segoe UI", size=10, weight="normal", slant="roman")
 
-        #self.attributes('-topmost', 'true')
-        #self.resizable(False, False)
+
         self.wm_overrideredirect(True) # Hide windows title_bar
         self.resizable = False
         self.chkbtn_fav_var = tk.IntVar()
@@ -2390,7 +2895,7 @@ class Tk_EditCaseMenu(tk.Toplevel):
 
         bcamp_api.update_case_record(self.key_value, new_sr_dict)
         # Refresh Caseview Tiles.
-        Gui.refresh_CaseView.value = self.key_value
+        self.CaseViewer.refresh_cur_casetiles()
 
         # Closing window...
         self.destroy()
@@ -2496,7 +3001,7 @@ class Tk_SettingsMenu(tk.Toplevel):
     def __init__(self, event=None):
         super().__init__()
         self.title("Basecamp Settings")
-        self.attributes('-topmost', 'true')
+        #self.attributes('-topmost', 'true')
         self.resizable(False, False)
         self.mode_str = tk.StringVar()
         self.selected_menu = tk.IntVar()
@@ -2596,6 +3101,9 @@ class Tk_SettingsMenu(tk.Toplevel):
         self.Tk_ParsingRules(self.base_menu_frame)
 
     def get_mode(self):
+        '''
+        Sets DevMode string in UI
+        '''
         if bcamp_api.get_config('dev_mode') == "True":
             self.mode_str.set("DevMode 😈")
         else:
@@ -2895,7 +3403,7 @@ class Tk_SettingsMenu(tk.Toplevel):
             super().__init__()
             self.master = master
             self.new_rule_frame_open = False
-            self.refresh_tree_callback = callbackVar()
+            self.refresh_tree_callback = bcamp_api.callbackVar()
             self.refresh_tree_callback.register_callback(self.update_ar_tree)
             self.total_rule_cnt = 0
 
@@ -3006,10 +3514,6 @@ class Tk_SettingsMenu(tk.Toplevel):
             'total_rule_count' var for new rules!
             '''
             parser_ruleset = bcamp_api.dump_parser()
-
-            #debug
-            print("\n***** Parser Rules *****")
-            print(parser_ruleset)
 
             # Updating total_rule_cnt value for new rule gen
             self.total_rule_cnt = 0
@@ -3249,8 +3753,12 @@ class Tk_SettingsMenu(tk.Toplevel):
                 if ruleid == "NEW RULE*":
                     print("$max", bcamp_api.get_max_prule())
                     # Calculate new rule_id from 'ParserMenu.total_rule_cnt'
+                    if bcamp_api.get_max_prule() == None: # No rules in DB yet...
+                        ruleid_index = -1
+                    else:
+                        ruleid_index = bcamp_api.get_max_prule()
                     newRule = True
-                    ruleid = (int(bcamp_api.get_max_prule()) + 1)
+                    ruleid = (int(ruleid_index) + 1)
 
                 new_rule_dict = {
                     'id': ruleid,
@@ -3276,7 +3784,6 @@ class Tk_SettingsMenu(tk.Toplevel):
         Configure the Enabled "Automations" found in "extension/automations"
         and update the config DB file for newly enabled modules.
         '''
-
         def __init__(self, master):
             super().__init__()
             # Defining Vars
@@ -3287,8 +3794,7 @@ class Tk_SettingsMenu(tk.Toplevel):
             self.info_str = tk.StringVar()
             self.extension_str = tk.StringVar()
             self.author_str = tk.StringVar()
-
-            # Get an updated record of avail "Automations"
+            self.save_data = {}
 
             # Rendering UI elements
             self.config_widgets()
@@ -3298,15 +3804,32 @@ class Tk_SettingsMenu(tk.Toplevel):
             self.fill_enabled_list()
 
         def config_widgets(self):
+            # Defining Fonts 
+            def_font = tk_font.Font(
+                family="Segoe UI", size=11, weight="normal", slant="roman")
+            bold_mini_font = tk_font.Font(
+                family="Segoe UI", size=10, weight="bold", slant="roman")
+            bold_font = tk_font.Font(
+                family="Segoe UI", size=12, weight="bold", slant="roman")
+
             self.lframe_automations = tk.LabelFrame(
                 self.master,
-                text="Disable/Enable Automations"
+                text="Disable/Enable Automations",
+                bg="#444444",
+                fg="#ffffff",
+                padx=5,
+                pady=5,
+                font=bold_font
             )
             self.automation_listbox = tk.Listbox(
                 self.lframe_automations,
                 width=40,
                 selectmode=tk.SINGLE,
                 relief="flat",
+                bg="#202020",
+                fg="#ffffff",
+                highlightthickness=0,
+                font=def_font
             )
             self.automation_listbox.bind(
                 '<<ListboxSelect>>', self.get_selected_info)
@@ -3317,59 +3840,98 @@ class Tk_SettingsMenu(tk.Toplevel):
                 background='#939393',
                 foreground='#111111',
                 relief="flat",
-                command=self.toggle_automation
+                command=self.toggle_automation,
             )
             self.enabled_listbox = tk.Listbox(
                 self.lframe_automations,
                 width=40,
                 relief="flat",
-                selectmode=tk.SINGLE
+                selectmode=tk.SINGLE,
+                bg="#202020",
+                fg="#ffffff",
+                highlightthickness=0,
+                font=def_font
             )
             self.enabled_listbox.bind(
                 '<<ListboxSelect>>', self.get_selected_info
             )
+
+            # Automation Details Frame
             self.lframe_info = tk.LabelFrame(
                 self.master,
-                text="Selected Details"
+                text="",
+                bg="#272822",
+                fg="#ffffff",
+                font=bold_font
             )
             self.label_info = tk.Label(
                 self.lframe_info,
                 text="Description:",
-                anchor='w'
+                anchor='w',
+                bg="#272822",
+                fg="#ffffff",
+                font=bold_font
             )
             self.info_text = tk.Label(
                 self.lframe_info,
                 textvariable=self.info_str,
                 width=40,
                 wraplength=250,
-                justify=tk.LEFT
+                justify=tk.LEFT,
+                bg="#272822",
+                fg="#ffffff",
+                font=def_font
             )
             self.label_extensions = tk.Label(
                 self.lframe_info,
                 text="Supported File Types:",
-                anchor='w'
+                anchor='w',
+                bg="#272822",
+                fg="#ffffff",
+                font=bold_font
             )
             self.extensions_text = tk.Label(
                 self.lframe_info,
                 textvariable=self.extension_str,
-                justify=tk.CENTER
+                justify=tk.CENTER,
+                bg="#272822",
+                fg="#ffffff",
+                font=def_font
             )
             self.label_author = tk.Label(
                 self.lframe_info,
                 text="Created By:",
-                anchor='w'
+                anchor='w',
+                bg="#272822",
+                fg="#ffffff",
+                font=bold_font
             )
             self.author_text = tk.Label(
                 self.lframe_info,
-                textvariable=self.author_str
+                textvariable=self.author_str,
+                bg="#272822",
+                fg="#ffffff",
+                font=def_font
             )
+
+            self.exe_paths_frame = tk.LabelFrame(
+                self.lframe_info,
+                bg="#272822",
+                fg="#FFFFFF",
+                text="Required Applications",
+                padx=10,
+                pady=10,
+                font=bold_mini_font
+            )
+
+            # Bottom Bar Content.
             self.save_bar = tk.Frame(
                 self.master,
                 background='#212121',
             )
             self.open_folder_btn = tk.Button(
                 self.save_bar,
-                text="Open Folder",
+                text="Open Automations Folder",
                 background='#939393',
                 foreground='#111111',
                 relief="flat",
@@ -3390,21 +3952,27 @@ class Tk_SettingsMenu(tk.Toplevel):
             self.lframe_automations.grid(
                 row=0, column=0, pady=4,  sticky='nsew')
             self.lframe_info.grid(row=1, column=0, pady=4, sticky='nsew')
+
             # lframe_automations grid
             self.lframe_automations.rowconfigure(0, weight=1)
             self.lframe_automations.columnconfigure(0, weight=1)
             self.automation_listbox.grid(row=0, column=0, sticky='nsew')
             self.enable_bar.grid(row=0, column=1, sticky='ns')
             self.enabled_listbox.grid(row=0, column=2, sticky='nsew')
+
             # lframe_info grid
             self.lframe_info.rowconfigure(0, weight=1)
             self.lframe_info.columnconfigure(1, weight=1)
             self.label_info.grid(row=0, column=0, sticky='w')
-            self.info_text.grid(row=1, column=0, rowspan=4, sticky='nsw')
+            self.info_text.grid(row=1, column=0, rowspan=3, sticky='nsw')
             self.label_extensions.grid(row=0, column=1, sticky='w')
             self.extensions_text.grid(row=1, column=1, sticky='nsw')
             self.label_author.grid(row=2, column=1, sticky='w')
             self.author_text.grid(row=3, column=1, sticky='nsw')
+            self.exe_paths_frame.grid(row=4, column=0, columnspan=2, sticky='nsew', pady=(15,0))
+            self.exe_paths_frame.columnconfigure(0, weight=1)
+            self.exe_paths_frame.grid_remove() # Keep hidden until needed.
+
             # SaveBar
             self.save_bar.grid(row=8, column=0, ipady=2, sticky="sew")
             self.save_bar.columnconfigure(0, weight=1)
@@ -3431,24 +3999,71 @@ class Tk_SettingsMenu(tk.Toplevel):
             for item in result[0]:
                 self.enabled_listbox.insert(tk.END, item)
 
-        def get_selected_info(self, event=None):
+        def get_selected_info(self, event):
+            '''
+            This method is called, EVERYTIME an Automation is selected in 
+            either in the enabled or disabled tree. This is responsible for
+            populating the default 'info', 'extension' and 'description'
+            fields based on values from in the DB (generated when auto. is 
+            first seen on launch.)
+
+            This method ALSO get the details of external EXE's needed for this
+            automation to work (if any) to allow these paths to be defined
+            within the UI. The results are passed to the "ren_exe_widgets()"
+            methods to actually draw the UI elements to allow these paths to 
+            be adjusted.
+            '''
             # Configure Middle-bar arrow direction
-            try:
-                if self.automation_listbox.get(self.automation_listbox.curselection()) != "":
-                    selected = self.automation_listbox.get(
-                        self.automation_listbox.curselection())
-                    self.enable_bar_str.set(">")
-            except:
-                if self.enabled_listbox.get(self.enabled_listbox.curselection()) != "":
-                    selected = self.enabled_listbox.get(
-                        self.enabled_listbox.curselection())
-                    self.enable_bar_str.set("<")
+            if self.automation_listbox.curselection() != ():
+                selected = self.automation_listbox.get(
+                    self.automation_listbox.curselection())
+                self.enable_bar_str.set(">")
+            elif self.enabled_listbox.curselection() != ():
+                selected = self.enabled_listbox.get(
+                    self.enabled_listbox.curselection())
+                self.enable_bar_str.set("<")
 
             # Populate detail menus for 'selected'
             self.info_str.set(bcamp_api.query_automation(selected, 'description'))
             self.extension_str.set(bcamp_api.query_automation(selected, 'extensions'))
             self.author_str.set(bcamp_api.query_automation(selected, 'author'))
 
+            # Get Automation EXE details
+            b_exe_list = bcamp_api.query_automation(selected, 'exe_paths')
+            py_exe_list = pickle.loads(b_exe_list) # convert Bin -> Py list
+            self.ren_exe_widgets(selected, py_exe_list)
+
+        def ren_exe_widgets(self, target_auto, exe_list):
+            '''
+            Iterating through the exe_list for a selected automation (provided
+            by the "get_selected_info()" method) this method actually renders
+            the "exe" sub menu in the UI.
+
+            'exe_list' format > [{"name":"X_TOOL", "path":c:\pathto\exe"}]
+                'name' = The UI string to represent this path.
+                'path' = The path to the target exe to be used by the auto.
+
+            * There can be multiple exe's in the list.
+            '''
+            # Clear the child_widgets before rendering new content.
+            if exe_list != None:
+                self.exe_paths_frame.grid()
+                for child in self.exe_paths_frame.winfo_children():
+                    child.destroy()
+            elif exe_list == None:
+                self.exe_paths_frame.grid_remove()
+
+            # Check if exe-list is None
+            if exe_list != None:
+                # Iterate through exe_list
+                row = 0 # used for Grid manager in the EXE template.
+                for exe_spec in exe_list:
+                    # Render UI element under the 'exe_paths_frame'
+                    self.Exe_template(self.exe_paths_frame, target_auto, exe_spec['name'],
+                        exe_spec['path'], row, exe_list)
+                    # Increment row by 1.
+                    row += 1
+            
         def toggle_automation(self, event=None):
             # Try for Enabling
             try:
@@ -3493,7 +4108,6 @@ class Tk_SettingsMenu(tk.Toplevel):
             for item in disabled_items:
                 bcamp_api.update_automation(item, 'enabled', "False")
 
-
         def direct_import_broswer(self):
             filename = filedialog.askopenfilename(
                 initialdir="/",
@@ -3502,9 +4116,137 @@ class Tk_SettingsMenu(tk.Toplevel):
             return filename
 
 
+        class Exe_template(tk.Frame):
+            '''
+            Template class rendered for EACH exe defined for a selected 
+            automation - allowing users to update paths for needed external
+            applications within the UI.
+            '''
+            def __init__(self, master_frame, target_auto, exe_name, exe_path, row, exe_list):
+                super().__init__(master=master_frame)
+                self.target_auto = target_auto
+                self.exe_name = exe_name
+                self.exe_path = exe_path
+                self.exe_list = exe_list # list passed for saving changes.
+                self.row = row
+                self.path_strVar = tk.StringVar()
+                self.path_strVar.set(self.exe_path)
+
+                self.config_widgets()
+                self.config_grid()
+            
+            def config_widgets(self):
+                # Defining Fonts
+                def_font = tk_font.Font(
+                    family="Segoe UI", size=10, weight="normal", slant="roman")
+                bold_font = tk_font.Font(
+                    family="Segoe UI", size=10, weight="bold", slant="roman")
+
+                self.configure(bg="#272822")
+                self.name_label = tk.LabelFrame(
+                    self,
+                    text = self.exe_name,
+                    bg="#272822",
+                    fg="#FFFFFF",
+                    padx=5,
+                    pady=5,
+                    font=bold_font
+                )
+                self.path_entry = tk.Entry(
+                    self.name_label,
+                    textvariable=self.path_strVar,
+                    bg="#101010",
+                    fg="#FFFFFF",
+                    font=def_font,
+                    insertbackground="#FFFFFF"
+                )
+                self.browse_button = tk.Button(
+                    self.name_label,
+                    text="Browse",
+                    command=self.explorer_browser,
+                    bg="#717463",
+                    fg="#101010",
+                    relief='flat',
+                    font=bold_font
+                )
+                self.save_button = tk.Button(
+                    self.name_label,
+                    text="Save",
+                    bg="#717463",
+                    fg="#101010",
+                    relief='flat',
+                    font=bold_font,
+                    command=self.save_to_db,
+                )
+
+            def config_grid(self):
+                # Allow root frame to expand to full *WIDTH*
+                #self.columnconfigure(0, weight=1)
+                
+                # Defining Widget grid
+                self.grid(row=self.row, column=0, sticky='ew')
+                self.columnconfigure(0, weight=1)
+                self.name_label.columnconfigure(0, weight=1)
+                self.name_label.grid(row=0, column=0, pady=2, sticky="nsew")
+                self.path_entry.grid(row=0, column=0, padx=2, sticky="nsew")
+                self.browse_button.grid(row=0, column=1, padx=2, sticky="nse")
+                self.save_button.grid(row=0, column=2, padx=2, sticky="nse")
+
+            def flash_entry(self):
+                '''
+                Called when a user attempts to save a path value that is not
+                accessable. This flashes the background of the entry field red
+                to motivate users to update the value.
+                '''
+                def set_red():
+                    self.path_entry['bg'] = 'red'
+                
+                def set_norm():
+                    self.path_entry['bg'] = '#101010'
+
+                self.after(000, set_red)
+                self.after(100, set_norm)
+                self.after(200, set_red)
+                self.after(300, set_norm)
+                self.after(400, set_red)
+                self.after(500, set_norm)
+
+            def explorer_browser(self):
+                filename = filedialog.askopenfilename(
+                    initialdir=self.exe_path,
+                    title=("Basecamp Automations - " + self.exe_name + " Path"),
+                )
+                print("$$auto New path> ", os.path.abspath(filename))
+                self.path_strVar.set(os.path.abspath(filename))
+
+            def save_to_db(self):
+                '''
+                Saves the current self.path_strVar to the DB for the
+                target automation.
+                '''
+                # First, test if path exist.
+                if os.access(self.path_strVar.get(), os.R_OK):
+                    realpath = True
+                elif not os.access(self.path_strVar.get(), os.R_OK):
+                    realpath = False
+                
+                if realpath:
+                    # Create NEW automation exe list
+                    updated_exe_list = self.exe_list
+                    updated_exe_list[self.row] = {
+                        'name':self.exe_name, 
+                        'path':self.path_strVar.get()
+                        }
+                    # Convert updated_exe_list to binary object w/ pickle.
+                    b_updated_exe_list = pickle.dumps(updated_exe_list)
+                    print("$b_updated_exe_list>", b_updated_exe_list)
+                    bcamp_api.update_automation(self.target_auto, 'exe_paths', b_updated_exe_list)
+                if not realpath:
+                    self.flash_entry()
+                
+
 class Tk_ImportMenu(tk.Frame):
     '''
-
     The standard Import Menu that allows users to query via SR Numbers, or
     direct file/dir imports. This Ttk.Frame also includes methods to 
     return various user entries for inital CaseData generation. Notably,
@@ -3524,6 +4266,7 @@ class Tk_ImportMenu(tk.Frame):
         self.import_string = import_string # Used to define what tab to remove
         self.advanced_opts_state = "off"
         self.notes_frame_state = "off"
+        self.chkbtn_download_var = tk.IntVar()
         self.chkbtn_fav_var = tk.IntVar()
         self.direct_import = False
         self.config_widgets()
@@ -3548,13 +4291,13 @@ class Tk_ImportMenu(tk.Frame):
     def config_widgets(self):
         bg_2 = "#111111"
         bg_1 = "#333333"
-        bg_0 = "#202020"
+        bg_0 = "#272822"
         fg_0 = "#FFFFFF"
         self.grn_0 = "#badc58"
         def_font = tk_font.Font(
-            family="Consolas", size=11, weight="normal", slant="roman")
+            family="Segoe UI", size=11, weight="normal", slant="roman")
         bold_font = tk_font.Font(
-            family="Consolas", size=12, weight="bold", slant="roman")
+            family="Segoe UI", size=12, weight="bold", slant="roman")
 
         # Input Validation registration
         vcmd = (self.register(self.onValidate),
@@ -3592,8 +4335,6 @@ class Tk_ImportMenu(tk.Frame):
             background=bg_0,
             foreground="#CBFF44",
         )
-
-
         self.label_favorite = tk.Label(
             self,
             text="Important?",
@@ -3678,8 +4419,21 @@ class Tk_ImportMenu(tk.Frame):
             background=bg_0,
             relief='flat'
         )
-
-
+        self.download_label = tk.Label(
+            self.ext_opts_frame,
+            text="Download Files : ",
+            background=bg_0,
+            foreground=fg_0,
+            font=def_font
+        )
+        self.download_chkbtn = tk.Checkbutton(
+            self.ext_opts_frame,
+            background=bg_0,
+            font=def_font,
+            variable=self.chkbtn_download_var,
+            onvalue=1,
+            offvalue=0
+        )
         self.label_account = tk.Label(
             self.ext_opts_frame,
             text="Account :",
@@ -3808,6 +4562,7 @@ class Tk_ImportMenu(tk.Frame):
         # ext_opts_frame contents
         self.ext_opts_frame.columnconfigure(0, weight=1)
         self.ext_opts_frame.columnconfigure(1, weight=1)
+
         self.label_account.grid(
             row=4, column=0, padx=4, pady=2, sticky="e")
         self.combox_account.grid(
@@ -3827,8 +4582,12 @@ class Tk_ImportMenu(tk.Frame):
             row=7, column=0, padx=4, pady=2, sticky="e")
         self.entry_tags.grid(
             row=7, column=1, padx=4, pady=2, sticky="w")
+        self.download_label.grid(
+            row=8, column=0, padx=4, pady=2, sticky="e")
+        self.download_chkbtn.grid(
+            row=8, column=1, padx=4, pady=2, sticky="w")
         self.label_hint1.grid(
-            row=8, column=0, columnspan=2, padx=4, pady=2, sticky="nsew")
+            row=12, column=0, columnspan=2, padx=4, pady=2, sticky="nsew")
 
 
         # Browse/Start Buttons
@@ -3874,7 +4633,8 @@ class Tk_ImportMenu(tk.Frame):
             'workspace': self.get_workspace(),
             'tags_list': self.get_tags(),
             'customs_list': self.get_customs(),
-            'notes': self.get_notes()
+            'notes': self.get_notes(),
+            'download_flag': self.chkbtn_download_var.get()
         }
 
         # Updating "import_item" -> Gui.import_handler(new_import_dict)
@@ -3891,7 +4651,6 @@ class Tk_ImportMenu(tk.Frame):
         '''
         print("!")
         self.entry_sr.delete(0, 'end')
-
 
     # Advanced Options "Get" methods
     def get_tags(self):
@@ -4001,10 +4760,6 @@ class Tk_ImportMenu(tk.Frame):
             (key, focusin, focusout, forced)
         %W = the tk name of the widget   
         '''
-
-        print("$onVal called ->", )
-
-
         #Sub-method to enable or disable the import button
         def enable_importBtn():
             self.btn_start["state"] = "normal"
@@ -4094,49 +4849,101 @@ class Tk_ThemeWizard(tk.Toplevel):
 
 
 class Tk_BottomBar(tk.Frame):
-    def __init__(self):
+    '''
+    A dynamic Frame at the bottom of the UI to store Connection status, and
+    Progressbar details.
+    '''
+    def __init__(self, FileOpsQ):
         super().__init__()
+        self.FileOpsQ = FileOpsQ
+        # ProgressBar Vars
+        self.progress_strVar = tk.StringVar()
+        self.progress_perc_strVar = tk.StringVar()
+        self.queue_strVar = tk.StringVar()
+        self.FileOpsQ.progress_obj.register_callback(self.update_progressbar)
+        self.FileOpsQ.queue_callback.register_callback(self.update_queue)
+
         self.config_widgets()
         self.config_grid()
 
-        #%%hex
+    def config_widgets(self):
+        # Font
+        self.def_font = tk_font.Font(
+            family="Segoe UI", size=8, weight="normal", slant="roman")
+
+        # Colors
+        self.base_bg = "#10100B"
+        self.base_fg = "#7E7E71"
+        self.prog_fg = "#A6E22E"
+
+        # Root Background color
         self.configure(
-            background="#111111"
+            background=self.base_bg
         )
 
-    def config_widgets(self):
-
-        self.bb_ver = ttk.Label(
+        # FileOps Frame
+        self.queue_strVar.set('QUEUE : 0') # Default Queue String
+        self.fileops_frame = tk.Frame(
             self,
+            background=self.base_bg
+        )
+        self.queue_label = tk.Label(
+            self.fileops_frame,
+            textvariable=self.queue_strVar,
+            background=self.base_bg,
+            foreground=self.base_fg,
+            relief="flat"
+        )        
+        self.progress_percent = tk.Label(
+            self.fileops_frame,
+            textvariable=self.progress_perc_strVar,
+            background=self.base_bg,
+            foreground=self.prog_fg           
+        )
+        self.progress_label = tk.Label(
+            self.fileops_frame,
+            textvariable=self.progress_strVar,
+            background=self.base_bg,
+            foreground=self.base_fg,
+        )
+
+
+        # Connectivity/Ver Frame
+        self.conn_frame = tk.Frame(
+            self,
+            background=self.base_bg
+        )
+        self.bb_ver = tk.Label(
+            self.conn_frame,
             text=bcamp_api.get_config('version'),
-            background="#111111",
-            foreground="#777777"
+            background=self.base_bg,
+            foreground=self.base_fg,
+            font=self.def_font
         )
         self.bb_remote_canvas = tk.Canvas(
-            self,
+            self.conn_frame,
             width=12,
             height=12,
-            background="#111111",
+            background=self.base_bg,
             highlightthickness=0,
         )
         self.remote_oval = self.bb_remote_canvas.create_oval(
             0, 0, 10, 10, fill='#000000', outline='#333333')
+        self.bb_remote_on = self.bb_remote_canvas.create_oval(
+            0, 0, 10, 10, fill='#6ab04c', outline='#333333')
+        self.bb_remote_off = self.bb_remote_canvas.create_oval(
+            0, 0, 10, 10, fill='#a10000', outline='#333333')
 
         self.bb_telemen_canvas = tk.Canvas(
-            self,
+            self.conn_frame,
             width=12,
             height=12,
-            background="#111111",
+            background=self.base_bg,
             highlightthickness=0
         )
         self.bb_telemen_on = self.bb_telemen_canvas.create_oval(
             0, 0, 10, 10, fill='#22a6b3', outline='#333333')
         self.bb_telemen_off = self.bb_telemen_canvas.create_oval(
-            0, 0, 10, 10, fill='#a10000', outline='#333333')
-
-        self.bb_remote_on = self.bb_remote_canvas.create_oval(
-            0, 0, 10, 10, fill='#6ab04c', outline='#333333')
-        self.bb_remote_off = self.bb_remote_canvas.create_oval(
             0, 0, 10, 10, fill='#a10000', outline='#333333')
 
         bb_telemen_tip = CustomTk_CreateToolTip(
@@ -4147,9 +4954,116 @@ class Tk_BottomBar(tk.Frame):
     def config_grid(self):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-        self.bb_ver.grid(row=0, column=0, sticky='se', padx=5)
+        # Root Frames 
+        self.fileops_frame.grid(
+            row=0, column=0, sticky="nsw"
+        )
+        self.conn_frame.grid(
+            row=0, column=1, sticky='nse'
+        )
+
+        # Filesops Frame Grid
+        self.queue_label.grid(
+            row=0, column=0, sticky='nsw', padx=1, pady=5
+        )
+        self.progress_percent.grid(
+            row=0, column=1, sticky='nsw', padx=1, pady=5
+        )
+        self.progress_label.grid(
+            row=0, column=2, sticky='nsw', padx=1, pady=5
+        )
+        # Conn Frame Grid
+        self.bb_ver.grid(row=0, column=0, sticky='se', padx=5, pady=5)
         self.bb_remote_canvas.grid(row=0, column=1, padx=2)
         self.bb_telemen_canvas.grid(row=0, column=2, padx=2)
+
+    # ProgressBar Methods
+    def update_progressbar(self, new_progress_obj):
+        '''
+        Callback method whenever *FilesOpsQ.progress_obj* var is modified from
+        the FileOpsQueue daemon initialized on start.
+
+        Parses the 'new_progress_obj' dictionary which contains a default
+        'mode' value, and any other info provided from the API scripts
+        for progress string formatting, which is done here!
+        '''
+        def calc_percentage(cursize, totalsize):
+            # Converts Totalsize/cursize to a rounded percentage.
+            raw_percent = cursize / totalsize
+            formated_percent = "{:.0%}".format(raw_percent)
+            return formated_percent
+        
+        if new_progress_obj['mode'] == None:
+            # Set when reset by FileOps Worker Thread
+            self.progress_strVar.set("")
+            self.progress_perc_strVar.set("")
+
+        if new_progress_obj['mode'] == 'download':
+            # convert bytes to kB
+            cur_kb = new_progress_obj['curbytes'] / 100
+            total_kb = new_progress_obj['totalbytes'] / 100
+            # Get percentage
+            prog_percentage = calc_percentage(cur_kb, total_kb)
+            # Get name and sr
+            fname = os.path.basename(new_progress_obj['srcpath'])
+            sr = new_progress_obj['sr']
+            formatted_string = (
+                "DOWNLOAD - " + sr + "/" + fname
+            )
+            self.progress_perc_strVar.set("[" + prog_percentage + "]")
+            self.progress_strVar.set(formatted_string)
+
+        if new_progress_obj['mode'] == 'upload':
+            # convert bytes to kB
+            cur_kb = new_progress_obj['curbytes'] / 100
+            total_kb = new_progress_obj['totalbytes'] / 100
+            # Get percentage
+            prog_percentage = calc_percentage(cur_kb, total_kb)
+            # Get name and sr
+            fname = os.path.basename(new_progress_obj['srcpath'])
+            sr = new_progress_obj['sr']
+            formatted_string = (
+                "UPLOAD - " + sr + "/" + fname
+            )
+            self.progress_perc_strVar.set("[" + prog_percentage + "]")
+            self.progress_strVar.set(formatted_string)
+
+        if new_progress_obj['mode'] == 'automation':
+
+            # Base Message wth vars from *new_progress_obj* dictionary.
+            automation_path = new_progress_obj['srcpath']
+            sr = new_progress_obj['sr']
+            fname = os.path.basename(new_progress_obj['srcpath'])
+            base_msg = (
+                "AUTOMATION - "
+                + sr
+                + "/" + fname
+            )
+            self.progress_strVar.set(base_msg)
+
+            def set_perc_val(input_val):
+                self.progress_perc_strVar.set(input_val)
+
+            # Checking if 'automation' already complete since recursive call.
+            if self.FileOpsQ.progress_obj.value['mode'] == 'automation':
+                # Modify progress string with *self.after* - measured in ms
+                self.after(1000, set_perc_val, "[.  ]")
+                self.after(2000, set_perc_val, "[.. ]")
+                self.after(3000, set_perc_val, "[...]")
+
+            # Recursive Call back to *self* with og new_progress_obj to loop
+            # the progress dots.
+            if self.FileOpsQ.progress_obj.value['mode'] == 'automation' and self.FileOpsQ.progress_obj.value['srcpath'] == automation_path:
+                print("$.Recrsiv call")
+                self.after(4000, self.update_progressbar, new_progress_obj)
+            else:
+                # Jobs Done! - *self.FileOpsQ.progress_obj* cleared by FileopsQueue.
+                # Manually clearing string here so we dont have to wait for the 
+                # threads to sync.
+                self.progress_strVar.set("")
+
+    def update_queue(self, new_queue_size):
+        self.queue_strVar.set('QUEUE : ' + str(new_queue_size))
 
 
 class Tk_TodoList(tk.Frame):
@@ -4290,7 +5204,6 @@ class Tk_WorkspaceTabs(tk.Frame):
     def config_widgets(self):
         # Building "Notebook" for multiple SR's to tab through...
 
-                #%%hex
         self.blk100 = "#EFF1F3"
         self.blk300 = "#B2B6BC"
         self.blk400 = "#717479"
@@ -4304,11 +5217,10 @@ class Tk_WorkspaceTabs(tk.Frame):
             self,
             width=400,
             height=320,
-            cursor="hand2"
         )
         self.tab_notebook.bind('<Button-3>', self.popup_menu)
         self.tab_notebook.bind('<Control-1>', self.ctrl_click_close)
-        self.default_tab(Tk_DefaultTab, self, "➕")
+        self.default_tab(Tk_DefaultTab, self, "＋")
 
         #%%hex
         self.right_click_menu = tk.Menu(
@@ -4360,10 +5272,12 @@ class Tk_WorkspaceTabs(tk.Frame):
     def ctrl_click_close(self, event):
         clicked_tab = self.tab_notebook.tk.call(
             self.tab_notebook._w, "identify", "tab", event.x, event.y)
+        #print("$.tab", clicked_tab)
         self.tab_notebook.forget(clicked_tab)
+        #print("$.o_tabs", self.open_tabs[1])
         self.open_tabs.pop(clicked_tab)
 
-    def update_case_template(self, widget):
+    def _LEGACY_update_case_template(self, widget):
         case_index = int(self.tab_id.get())
         target_case = self.open_tabs[case_index][1]
         # Get dictionary object of target Case & Widget.
@@ -4387,9 +5301,6 @@ class Tk_WorkspaceTabs(tk.Frame):
                     # Update template.value...
                     # which calls targets init Tk_CaseMasterFrame.render_panes"
                     target_case.template.value = temp_template
-
-        # Update applicable widget textvariable for popup menu!
-        #print("widget? > ", widget)
 
     # Called by Import_handler or opening a CaseView Tab
     def render_workspace(self, key_value):
@@ -4422,13 +5333,16 @@ class Tk_WorkspaceTabs(tk.Frame):
 
         # If open_tab_counter is zero - Render NEW Workspace. 
         if open_tab_counter == 0:
-            # Key-Value passed to Tk_CaseMasterFrame instance to render "Workspace" template.
-            new_tab_frame = Tk_CaseMasterFrame(self.tab_notebook, key_value, self, self.file_queue)
+            # Key-Value passed to Tk_CaseMasterFrame instance to render "
+            # Workspace" template.
+            new_tab_frame = Tk_CaseMasterFrame(self.tab_notebook, key_value, 
+                self, self.file_queue, open_index)
             # Add Tab with new Workpane
             self.tab_notebook.add(
                 new_tab_frame,
                 text=key_value, # Tab Header
-                padding=2
+                padding=2,
+                sticky='nsew'
             )
             # "Jumping" to imported SR
             self.tab_notebook.select(new_tab_frame)
@@ -4484,7 +5398,7 @@ class Tk_WorkspaceTabs(tk.Frame):
         self.tab_notebook.select(new_tab_frame)
 
 
-class Tk_DefaultTab(ttk.Frame):
+class Tk_DefaultTab(tk.Frame):
     '''
     The Default "import" tab. If no other workspaces are rendered,
     users will be presented with this Widget first.
@@ -4494,18 +5408,22 @@ class Tk_DefaultTab(ttk.Frame):
         super().__init__(master)
         self.Tk_WorkspaceTabs = Tk_WorkspaceTabs
         self.def_font = tk_font.Font(
-            family="Consolas", size=10, weight="normal", slant="roman")
+            family="Segoe UI", size=12, weight="normal", slant="roman")
 
         self.btn_big = tk.Button(
             self.master,
-            text="Click anywhere here to Import a new Case.\n\nYou can also use <CTRL> + <n>.\n\n Or <CTRL> + <Click> to import a 'list.txt' of Cases here." ,
+            text="""     Click anywhere here to Import a new Case.
+                \nYou can also use <CTRL> + <N>.\n
+                Or you can <CTRL> + <Click> to import a 'list.txt'""" ,
             command=self.render_import_menu,
             font=self.def_font,
-            background="#0F1117",
-            foreground="#717479",
+            background="#272822",
+            foreground="#8B9798",
             cursor="plus",
-            activebackground="#0F1117",
-            activeforeground="#717479",
+            activebackground="#272822",
+            activeforeground="#8B9798",
+            relief='flat',
+            overrelief='flat'
         )
 
         self.master.rowconfigure(0, weight=1)
@@ -4523,50 +5441,7 @@ class Tk_DefaultTab(ttk.Frame):
 
     def direct_import_broswer(self, event=None):
         # Passing Args to API to do the actually work.
-        bcamp_api.bulk_importor( Gui.import_item)
-
-
-
-    #    # Prompt User for file to import
-    #    filename = filedialog.askopenfilename(
-    #        initialdir="/",
-    #        title="Basecamp Bulk Importer - Select a file to import!",
-    #        filetypes=[("Text files",
-    #                    "*.txt*")])
-    #    # Open resulting file
-    #    print("IMPORT FILE:", filename)
-    #    ifile = open(filename, 'r')
-    #    ifile_content = ifile.readlines()
-    #    # Read lines of "ifile" and import one, by one.
-    #    for line in ifile_content:
-    #        print("-->", line)
-    #        # Splitting string to parse for account, and product vals.
-    #        split_line = line.split(', ')
-    #        # Order -> Sr_Num, Product, Account S
-    #        self.start_bulk_import(split_line[0], split_line[1], split_line[2])
-
-    #def start_bulk_import(self, sr_num, product, account):
-    #    # Creating "import_item" Dictionary
-    #    new_import_dict = {
-    #        # Required Dict Vals
-    #        'sr_number': sr_num,
-    #        #'remote_path': None,  # Set in Finalize...
-    #        #'local_path': None, # Set in Finalize...
-    #        'pinned': 0, # Default = !Pinned
-    #        # Import/Calculated Values
-    #        'product': product.strip(),
-    #        'account': account.strip(),
-    #        #'import_time': None,
-    #        #'last_ran_time': None,
-    #        # Untouched Dict Vals for bulk
-    #        'bug_id': None,
-    #        'workspace': None,
-    #        'notes': None,
-    #        'tags_list': None,
-    #        'customs_list': None
-    #    }
-    #    # Updating "import_item" -> Gui.import_handler(new_import_dict)
-    #    Gui.import_item.value = new_import_dict
+        bcamp_api.bulk_importor(Gui.import_item)
 
     def bulk_cursor(self, event=None):
         self.btn_big['cursor'] = 'top_side'
@@ -4584,18 +5459,19 @@ class Tk_CaseMasterFrame(tk.Frame):
     '''
     # Tk_CaseMasterFrame Methods...
 
-    def __init__(self, master, key_value, WorkspaceTabs, file_queue):
-        super().__init__()
+    def __init__(self, master, key_value, WorkspaceTabs, file_queue, tab_index):
+        super().__init__(master=master)
         # Vars
         self.master = master
         self.key_value = key_value
         self.WorkspaceTabs = WorkspaceTabs
         self.file_queue = file_queue
+        self.tab_index = tab_index
         self.RPATH = str(pathlib.Path(
             __file__).parent.absolute()).rpartition('\\')[0]
         self.frame_list = []
         self.open_panes = []
-        self.fb_cur_sel = callbackVar()
+        self.fb_cur_sel = bcamp_api.callbackVar()
 
         # DEFINING DEFAULT WORKSPACE
         self.default_template = [
@@ -4609,7 +5485,7 @@ class Tk_CaseMasterFrame(tk.Frame):
                 },
                 {
                     'index': 2,
-                    'workpanes': [('default_casenotes', True), ('default_filenotes', False)]
+                    'workpanes': [('default_casenotes', False), ('default_filenotes', False)]
                 },
             ]
 
@@ -4617,18 +5493,32 @@ class Tk_CaseMasterFrame(tk.Frame):
         self.config_widgets()
         self.config_grid()
         self.config_bindings()
-        self.template = callbackVar()
+        self.template = bcamp_api.callbackVar()
         self.template.register_callback(self.render_panes)
         self.template.value = self.get_template()
 
     # Tk Methods
     def config_widgets(self):
+        # Fonts
+        self.def_font = tk_font.Font(
+            family="Segoe UI", size=8, weight="bold", slant="roman")
+        
+        # Colors
+        self.main_bg = "#414438"
+        #self.active_bg = "#10100D"
+        self.active_bg = "#656A57"
+        self.enabled_bg = "#A6E22E"
+        #self.active_txt = "#1D1E19"
+        self.active_txt = "#C5C3B2"
+        self.enabled_txt = "#141414"
+        self.spacer_col = "#10100B"
+
         # Panedwindow
         self.main_pane = tk.PanedWindow(
             self,
-            background="#bfbeb0",
+            background="#10100B",
             bd=0,
-            #sashwidth=8,
+            sashwidth=2,
             #showhandle=True
         )
 
@@ -4640,26 +5530,26 @@ class Tk_CaseMasterFrame(tk.Frame):
 
         self.main_col0 = tk.PanedWindow(
             self.main_pane,
-            background="black",
+            background=self.spacer_col,
             bd=0,
-            orient='vertical'
-            #sashwidth=8,
+            orient='vertical',
+            sashwidth=2,
             #showhandle=True
         )
         self.main_col1 = tk.PanedWindow(
             self.main_pane,
-            background="black",
+            background=self.spacer_col,
             bd=0,
-            orient='vertical'
-            #sashwidth=8,
+            orient='vertical',
+            sashwidth=2,
             #showhandle=True
         )            
         self.main_col2 = tk.PanedWindow(
             self.main_pane,
-            background="black",
+            background=self.spacer_col,
             bd=0,
-            orient='vertical'
-            #sashwidth=8,
+            orient='vertical',
+            sashwidth=2,
             #showhandle=True
         )
         # Intializing Frames
@@ -4673,25 +5563,130 @@ class Tk_CaseMasterFrame(tk.Frame):
         self.main_col2.add(self.tk_case_notes, stretch="always")
         self.main_col2.add(self.tk_file_notes, stretch="always")
 
-        # TODO - Bottom Bar concept.
-        # Lower Bar to render different columns
-        self.bottom_frame = tk.Frame(
-            self
+
+        # Top Bar to render different columns
+        self.toolbar_frame = tk.Frame(
+            self,
+            bg=self.main_bg
         )
-        self.example_btn = tk.Button(
-            self.bottom_frame,
-            text="FileBrowser"
+
+        # PANES SUBFRAME
+        self.toolbar_panes_frame = tk.Frame(
+            self.toolbar_frame,
+            bg=self.main_bg
         )
-            
+        self.tb_spacer = tk.Frame(
+            self.toolbar_frame,
+            bg=self.spacer_col,
+            height=1
+        )
+        self.fb_btn = tk.Button(
+            self.toolbar_panes_frame,
+            text="Filebrowser",
+            bg=self.main_bg,
+            fg=self.main_bg,
+            relief='flat',
+            width=20,
+            font=self.def_font,
+            command=lambda widget='default_filebrowser': self.update_pane_template(widget)
+        )
+        self.lv_btn = tk.Button(
+            self.toolbar_panes_frame,
+            text="Logviewer",
+            bg=self.main_bg,
+            fg=self.main_bg,
+            relief='flat',
+            width=20,
+            font=self.def_font,
+            command=lambda widget='default_logview': self.update_pane_template(widget)
+        )
+        self.cn_btn = tk.Button(
+            self.toolbar_panes_frame,
+            text="Casenotes",
+            bg=self.main_bg,
+            fg=self.main_bg,
+            relief='flat',
+            width=20,
+            font=self.def_font,
+            command=lambda widget='default_casenotes': self.update_pane_template(widget)
+        )
+        self.fn_btn = tk.Button(
+            self.toolbar_panes_frame,
+            text="Filenotes",
+            bg=self.main_bg,
+            fg=self.main_bg,
+            relief='flat',
+            width=20,
+            font=self.def_font,
+            command=lambda widget='default_filenotes': self.update_pane_template(widget)
+        )
+        # OPTIONS SUBFRAME
+        self.toolbar_opts_frame = tk.Frame(
+            self.toolbar_frame,
+            bg=self.main_bg
+        )
+        self.options_btn = tk.Button(
+            self.toolbar_opts_frame,
+            text="☰",
+            bg=self.main_bg,
+            fg=self.active_txt,
+            relief='flat',
+            #font=self.def_font
+        )
+        self.close_btn = tk.Button(
+            self.toolbar_opts_frame,
+            text="X",
+            bg=self.main_bg,
+            fg=self.active_txt,
+            relief='flat',
+            font=self.def_font,
+            command=self.close_workspace
+        )
+
     def config_grid(self):
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
+        # Default order of toolbar is on TOP
+        self.toolbar_frame.grid(
+            row=0, column=0, sticky="new"
+        )
         self.main_pane.grid(
-            row=0, column=0, columnspan=2, sticky='nsew')
+            row=1, column=0, sticky='nsew'
+        )
+
+        self.toolbar_frame.columnconfigure(0, weight=1)
+        self.tb_spacer.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        # Toolbar Panes Grid
+        self.toolbar_panes_frame.grid(
+            row=0, column=0, sticky="nsw"
+        )
+        self.fb_btn.grid(
+            row=0, column=0, padx=3, pady=3, sticky="nsw"
+        )
+        self.lv_btn.grid(
+            row=0, column=1, padx=3, pady=3, sticky="nsw"
+        )
+        self.cn_btn.grid(
+            row=0, column=2, padx=3, pady=3, sticky="nsw"
+        )
+        self.fn_btn.grid(
+            row=0, column=3, padx=3, pady=3, sticky="nsw"
+        )
+        # Toolbar Options Frame
+        self.toolbar_opts_frame.grid(
+            row=0, column=1, sticky="nse"
+        )
+        self.options_btn.grid(
+            row=0, column=0, padx=3, pady=3, sticky="nsw"
+        )
+        self.close_btn.grid(
+            row=0, column=1, padx=3, pady=3, sticky="nse"
+        )
 
     def config_bindings(self):
         self.main_pane.bind("<Double-1>", self.auto_resize_pane)
+        self.toolbar_frame.bind("<Enter>", self.set_toolbar_colors)
+        self.toolbar_frame.bind("<Leave>", self.reset_toolbar_colors)
 
     def get_template(self):
         db_template = bcamp_api.query_sr(self.key_value, 'workspace')
@@ -4706,15 +5701,13 @@ class Tk_CaseMasterFrame(tk.Frame):
         This method translates the datastore "workspace" template
         and renders the actual horizontal panes, vertical panes.
 
-        Any assigned Workpanes will also be rendered here if available
-        in the template.
+        Also updates the toolbar pane color sets based on what is enabled
         '''
         # NOTE - When attempting to render the template using the legacy loop,
         # performance was impacted after 15 cycles, likely due to a memory
         # leak or some other error in the [Python -> Tk/Tcl -> C] pipeline.
         # Programmer included :). As a result, I am "hardcoding" the
         # Workbench to 3 columns.
-
         # Render Vert Panes based on template
         for pane_dict in template:
             workpanes = pane_dict['workpanes']
@@ -4744,8 +5737,19 @@ class Tk_CaseMasterFrame(tk.Frame):
 
                     if pane_class[1] == True:
                         columnpane.paneconfigure(rendered_pane, hide=False, stretch="always")
+                        # Append pane name to 'open_panes' for UI colors
+                        # if not already in list to prevent dupes
+                        if pane_class[0] not in self.open_panes:
+                            self.open_panes.append(pane_class[0])
                     else:
                         columnpane.paneconfigure(rendered_pane, hide=True)
+                        ### # Remove from 'open_panes'
+                        ### try:
+                        ###     self.open_panes.remove(pane_class[0])
+                        ### except:
+                        ###     # Errors thrown if item does not exist in list,
+                        ###     # which is expected on intial render.
+                        ###     pass 
                         hidden_pane_count += 1
                     
                 # "Place" columnpane now with rendered frame, into
@@ -4754,41 +5758,17 @@ class Tk_CaseMasterFrame(tk.Frame):
                 if hidden_pane_count == len(columnpane.winfo_children()): # All panes are hidden
                     self.main_pane.paneconfigure(columnpane, hide=True)
                 else:
-                    # First, get size of main_pane
-                    main_pane_width = self.main_pane.winfo_width()
+                    main_pane_width = self.master.winfo_width()
                     self.main_pane.paneconfigure(columnpane, hide=False)
-                    self.main_pane.add(columnpane, stretch='always', minsize=10)
+                    self.main_pane.add(columnpane, stretch='always', minsize=10, width=main_pane_width/3)
+
 
         # Save new template into Sqlite3 DB
         print("SQLite3: Saving template changes to DB for", self.key_value)
         binary_template = pickle.dumps(template)
         bcamp_api.update_sr(self.key_value, 'workspace', binary_template)
 
-    def show_workpane(self, target_workpane):
-        '''
-        Updates the *target_workpane* bool in self.template - Showing the target
-        workpane in the SR's Tab.
-        '''
-        # Get dictionary object of target Case & Widget.
-        for col_dict in self.template.value:
-            pane_index = -1 # Offset from 0
-            for workpane in col_dict["workpanes"]:
-                pane_index += 1
-                if workpane[0] == target_workpane:
-                    col_index = col_dict["index"]
-                    # Create a copy of self.template
-                    target_pane = self.template.value[col_index]['workpanes'][pane_index]
-                    new_pane_set = (target_pane[0], True)
-                    # Update self.template.value with changes...
-                    temp_template = self.template.value
-                    temp_template[col_index]['workpanes'][pane_index] = new_pane_set
-                    # Update template.value - which calls target Frame's "update_panes"
-                    self.template.value = temp_template
-
     def auto_resize_pane(self, event):
-        print("YOU CLICKED ON THE PANE - GOOD BOY")
-        print("event>", event)
-
         ident = self.main_pane.identify(event.x, event.y)
         print(ident)
 
@@ -4810,7 +5790,99 @@ class Tk_CaseMasterFrame(tk.Frame):
             while resize_counter <= rendered_cols:
                 self.main_pane.paneconfig(columns[resize_counter], width=new_width)
                 resize_counter += 1
-                
+
+    def set_toolbar_colors(self, event=None):
+        '''
+        Sets the Colors of the TK widgets so that can be visible when a user
+        mouses over the toolbar as they are "hidden" by default.
+        '''
+        # Default Colors on enter - will override if enabled shortly.
+        self.fb_btn['bg'] = self.active_bg
+        self.fb_btn['fg'] = self.active_txt
+        self.lv_btn['bg'] = self.active_bg
+        self.lv_btn['fg'] = self.active_txt
+        self.cn_btn['bg'] = self.active_bg
+        self.cn_btn['fg'] = self.active_txt
+        self.fn_btn['bg'] = self.active_bg
+        self.fn_btn['fg'] = self.active_txt
+
+        # Get items in 'self.open_panes' as these will have a different
+        # color set than the hidden panes.
+        if "default_filebrowser" in self.open_panes:
+            self.fb_btn['bg'] = self.enabled_bg
+            self.fb_btn['fg'] = self.enabled_txt
+
+        if "default_logview" in self.open_panes:
+            self.lv_btn['bg'] = self.enabled_bg
+            self.lv_btn['fg'] = self.enabled_txt
+
+        if "default_casenotes" in self.open_panes:
+            self.cn_btn['bg'] = self.enabled_bg
+            self.cn_btn['fg'] = self.enabled_txt
+
+        if "default_filenotes" in self.open_panes:
+            self.fn_btn['bg'] = self.enabled_bg
+            self.fn_btn['fg'] = self.enabled_txt
+
+    def reset_toolbar_colors(self, event):
+        '''
+        Sets the Colors of the TK widgets so that they are HIDDEN.
+        '''
+        self.fb_btn['bg'] = self.main_bg
+        self.fb_btn['fg'] = self.main_bg
+        self.lv_btn['bg'] = self.main_bg
+        self.lv_btn['fg'] = self.main_bg
+        self.cn_btn['bg'] = self.main_bg
+        self.cn_btn['fg'] = self.main_bg
+        self.fn_btn['bg'] = self.main_bg
+        self.fn_btn['fg'] = self.main_bg
+
+    def update_pane_template(self, widget):
+        '''
+        Bind method when user selects one of the Workpane tiles in the 
+        toolbar. This will update the 'self.template' with an updated dictObj,
+        either showing or hiding the selected widget, and call the 
+        'set_toolbar_colors' method for UI updates. 
+        '''
+        # Get dictionary object of target Case & Widget.
+        for col_dict in self.template.value:
+            pane_index = -1 # Offset from 0
+            for workpane in col_dict["workpanes"]:
+                pane_index += 1
+                if workpane[0] == widget:
+                    col_index = col_dict["index"]
+                    # Create a copy of self.template
+                    target_pane = self.template.value[col_index]['workpanes'][pane_index]
+                    # Flip the bool for target_pane[1] to show/hide 
+                    if target_pane[1]: # Shown = True
+                        new_pane_set = (target_pane[0], False)
+                        # We can remove item safely here as rendered frames
+                        # are added to self.open_panes during init.
+                        #
+                        # target_pane[0] = 'default_x' pane name.
+                        self.open_panes.remove(target_pane[0])
+
+                    else: # Hidden = False
+                        new_pane_set = (target_pane[0], True)
+                    # Update self.template.value with changes...
+                    temp_template = self.template.value
+                    temp_template[col_index]['workpanes'][pane_index] = new_pane_set
+                    # Update template.value...
+                    # which calls targets init Tk_CaseMasterFrame.render_panes"
+                    self.template.value = temp_template
+
+        # And call set_toolbar_colors to render the new UI colors.
+        self.set_toolbar_colors()
+
+    def close_workspace(self, event=None):
+        # First, define index of tab.
+        pop_index = next(
+            (i for i, item in enumerate(self.WorkspaceTabs.open_tabs) if item[0] == self.key_value), None)
+        # Remove Tab from UI
+        self.WorkspaceTabs.tab_notebook.forget(pop_index)
+        # And update the 'open_tabs' so the indexes are accurate later.
+        del self.WorkspaceTabs.open_tabs[pop_index]
+
 
 class Tk_FileBrowser(tk.Frame):
     '''
@@ -4828,13 +5900,6 @@ class Tk_FileBrowser(tk.Frame):
         self.key_value = key_value
         self.file_queue = file_queue
         self.case_frame = Tk_CaseMasterFrame
-        self.progress_strVar = tk.StringVar()
-        self.queue_strVar = tk.StringVar()
-        Gui.fb_progress_string.register_callback(self.update_progess_string)
-        Gui.fb_queue_string.register_callback(self.update_queue_string)
-
-        # Updated file_dict for "post task" such as the SimpleParser
-        self.master_file_rec = {}
 
         # Getting install dir path...
         self.RPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
@@ -4842,13 +5907,12 @@ class Tk_FileBrowser(tk.Frame):
         # Get time_format from config
         self.time_zone = bcamp_api.get_config('time_zone')
         self.time_format = bcamp_api.get_config('time_format')
-        
+        self.show_favTree = bcamp_api.get_config('ui_render_favtree')
         # Get Remote root path for 'key_value'
         self.sr_remote_path = bcamp_api.query_sr(self.key_value, "remote_path")
         self.sr_local_path = bcamp_api.query_sr(self.key_value, "local_path")
 
-        # Toggle for Workflow Frame
-        self.frame_label_queue_state = "off"
+        Gui.fb_showfavtree.register_callback(self.render_favTree)
 
         # Building Tk Elements
         self.config_widgets()
@@ -4875,10 +5939,60 @@ class Tk_FileBrowser(tk.Frame):
         self.blk900 = "#05070F"
         self.act300 = "#D5A336"
 
+        self.topbar_bg = "#272822"
+        self.topbar_fg = "#919288"
+
+        # Fonts
+        self.def_font = tk_font.Font(
+            family="Segoe UI", size=10, weight="normal", slant="roman")   
+
         self.configure(
             background="#111111",
             relief='flat'
         )
+        # TopBar widgets
+        self.topbar_frame = tk.Frame(
+            self,
+            bg=self.topbar_bg,
+        )
+        self.run_simpleparser = tk.Button(
+            self.topbar_frame,
+            text='>',
+            bg=self.topbar_bg,
+            fg=self.topbar_fg,
+            relief='flat',
+            font=self.def_font,
+            command=self.launch_SimpleParser
+        )
+        self.refresh_trees = tk.Button(
+            self.topbar_frame,
+            text='⟳',
+            bg=self.topbar_bg,
+            fg=self.topbar_fg,
+            relief='flat',
+            font=self.def_font,
+            command=self.start_tree_refresh
+        )
+        self.download_all = tk.Button(
+            self.topbar_frame,
+            text='⍗',
+            bg=self.topbar_bg,
+            fg=self.topbar_fg,
+            relief='flat',
+            font=self.def_font,
+            command=self.download_all_files
+        )
+        self.upload_all = tk.Button(
+            self.topbar_frame,
+            text='⍐',
+            bg=self.topbar_bg,
+            fg=self.topbar_fg,
+            relief='flat',
+            font=self.def_font,
+            command=self.upload_all_files
+        )
+
+        # FileTrees
         self.trees_pane = tk.PanedWindow(
             self,
             orient='vertical',
@@ -4910,9 +6024,9 @@ class Tk_FileBrowser(tk.Frame):
 
         # fonts
         self.def_font = tk_font.Font(
-            family="Consolas", size=11, weight="normal", slant="roman")
+            family="Segoe UI", size=11, weight="normal", slant="roman")
         self.dir_font = tk_font.Font(
-            family="Consolas", size=11, weight="bold", slant="roman")
+            family="Segoe UI", size=11, weight="bold", slant="roman")
 
         # Treeview Tags
         self.file_tree.tag_configure('debug',  background="#0a0a0a", foreground="#ff7979", font=self.def_font)
@@ -4957,90 +6071,61 @@ class Tk_FileBrowser(tk.Frame):
         self.sr_remote_path = bcamp_api.query_sr(self.key_value, "remote_path")
         self.sr_local_path = bcamp_api.query_sr(self.key_value, "local_path")
 
-
-        # Testing NEW menu Changes
-
         self.remote_menu = self.CustomTk_Filebrowser_Menu(
             self.file_tree, 
             "remote", 
             self,
-            self.case_frame
+            self.case_frame,
+            self.key_value
             )
         self.local_menu = self.CustomTk_Filebrowser_Menu(
             self.file_tree, 
             "local", 
             self,
-            self.case_frame
+            self.case_frame,
+            self.key_value
             )
         self.fav_menu = self.CustomTk_Filebrowser_Menu(
             self.fav_tree, 
             "fav", 
             self,
-            self.case_frame
+            self.case_frame,
+            self.key_value
             )
-
-        # Queue Manager
-        self.fileops_frame = tk.Frame(
-            self,
-            background="#202020",
-        )
-        self.progress_label = tk.Label(
-            self.fileops_frame,
-            textvariable=self.progress_strVar,
-            background="#202020",
-            foreground="#757575"
-        )
-        self.queue_label = tk.Label(
-            self.fileops_frame,
-            textvariable=self.queue_strVar,
-            background="#202020",
-            foreground="#757575",
-            relief="flat"
-        )
-        self.btn_show_queue = tk.Button(
-            self.fileops_frame,
-            text="˅",
-            command=self.show_QueueManager,
-            background="#202020",
-            foreground="#757575",
-            relief="flat"
-        )
-        self.queue_frame = tk.LabelFrame(
-            self.fileops_frame,
-            text="Workflow Queue",
-            background="#111111",
-        )
-        self.listbox_dnd = tk.Listbox(self.queue_frame)
-        self.listbox_dnd.insert(0, "example-Thread")
-        self.listbox_dnd.insert(0, "random-Thread")
-        self.listbox_dnd.insert(0, "Upload-Thread")
-
-        self.dnd_cur_index = None
-
-        # GRID
-        self.queue_frame.columnconfigure(0, weight=1)
 
     def config_grid(self):
         # GRID
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
-        self.columnconfigure(2, weight=1)
-        # Adding Trees to 'self.trees_pane'
-        self.trees_pane.grid(row=0, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
-        self.trees_pane.add(self.file_tree, height=500, sticky='nsew')
-        self.trees_pane.add(self.fav_tree, height=200, sticky='nsew')
+        #self.columnconfigure(1, weight=1)
+        #self.columnconfigure(2, weight=1)
 
-        # "Progress-Bar" & Queue Manager.
-        self.fileops_frame.grid(row=7, column=0, columnspan=4, sticky='nsew')
-        self.fileops_frame.rowconfigure(0, weight=1)
-        self.fileops_frame.columnconfigure(0, weight=1)
-        self.progress_label.grid(row=0, column=0, sticky='nsw')
-        self.queue_label.grid(
-            row=0, column=1, columnspan=3, sticky='sew')
-        #self.btn_show_queue.grid(
-        #    row=0, column=1, columnspan=3, sticky='sew')
-        self.listbox_dnd.grid(row=0, column=0, columnspan=3, sticky='nsew')
+        # Root Panes
+        self.topbar_frame.grid(
+            row=0, column=0, sticky="nsew"
+        )
+        self.trees_pane.grid(row=1, column=0, padx=2, pady=(10,0), sticky='nsew')
+
+        # Topbar Grid
+        self.topbar_frame.columnconfigure(0, weight=1)
+        self.run_simpleparser.grid(
+            row=0, column=0, sticky="nse", padx=0, pady=0            
+        )
+        self.download_all.grid(
+            row=0, column=1, sticky="nse", padx=0, pady=0
+        )
+        self.upload_all.grid(
+            row=0, column=2, sticky="nse", padx=0, pady=0
+        )
+        self.refresh_trees.grid(
+            row=0, column=3, sticky="nse", padx=0, pady=0
+        )
+
+        # Treespane Grid
+        self.trees_pane.add(self.file_tree, height=500, sticky='nsew')
+        # Checks DB to determine if fav_tree pane should be rendered.
+        if bcamp_api.get_config('ui_render_favtree') == 'True':
+            self.trees_pane.add(self.fav_tree, height=200, sticky='nsew')
 
     def config_bindings(self):
         # File Treeview Command Bindings
@@ -5054,10 +6139,6 @@ class Tk_FileBrowser(tk.Frame):
         self.fav_tree.bind("<Double-Button-1>", self.on_double_click)
         self.fav_tree.bind("<Return>", self.fav_right_click_open)
         self.fav_tree.bind("<<TreeviewSelect>>", self.toggle_trees_focus)
-
-        # Queue Manager Bindings
-        self.listbox_dnd.bind('<Button-1>', self.dnd_set_current)
-        self.listbox_dnd.bind('<B1-Motion>', self.dnd_shift_selection)
 
     # Content Methods
     def _LEGACY_render_snapshot(self, key_value):
@@ -5460,13 +6541,10 @@ class Tk_FileBrowser(tk.Frame):
                 next(tree_gen(depth_index))
             except StopIteration:
                 #print(mode, "Jobs Done!")
-
-                threading.Thread(
-                    target=self.post_task,
-                    args=[updated_file_record, enableParser]).start()
+                self.post_task(updated_file_record)
                 return
 
-    def post_task(self, updated_file_record, enableParser):
+    def post_task(self, updated_file_record):
         '''
         This method calls various post file render parsers using the 
         'updated_file_record' dictionary to ensure the latest file structure
@@ -5478,13 +6556,15 @@ class Tk_FileBrowser(tk.Frame):
         # Launching seperate thread to update DB.
         threading.Thread(target=bcamp_api.update_files, 
                 args=(self.key_value, updated_file_record)).start()
-
-        if enableParser:
-            # Sending 'updated_file_record* to the "SimpleParser" engine.
-            # 'self' - Tk_FileBrowser passed to update file-record.
-            bcamp_api.SimpleParser(updated_file_record, self.key_value, self)
             
     # General Treeview Methods
+    def start_tree_refresh(self):
+        '''
+        bcamp-api: Refreshes the File-Trees with an independent thread not in
+        the FileOpsQ.
+        '''
+        bcamp_api.refresh_filetrees(self.key_value, self)
+
     def toggle_trees_focus(self, event):
         '''
         Allows for only one element from either File or Fav tree to be
@@ -5576,7 +6656,8 @@ class Tk_FileBrowser(tk.Frame):
                 # Send to *resize_tree_col* method to handle resizing.
                 self.resize_tree_col(treeview, '#3', data_lst)
         else:
-            print("Clicked *ITEM*")
+            
+            # Item/File Clicked in browser.
             # Passing values to open_default, dynamic for each treeview
             target_tree = event.widget
             iid = target_tree.selection()[0]
@@ -5696,58 +6777,49 @@ class Tk_FileBrowser(tk.Frame):
             # no action required
             pass
 
+    def render_favTree(self, new_string):
+        '''
+        Checks the DB to render or hide the 'Favorites Tree' in the 
+        classes root pane.
+        '''
+        print("render_favTree -> called w/", new_string)
+        # GET DB
+        config_val = bcamp_api.get_config('ui_render_favtree')
+        # LOGIC
+        if config_val == 'True': #SQLite3 stores strings, not bool.
+            # Check if pane exist already...
+            if self.fav_tree not in self.trees_pane.panes():
+                print("fav_tree not in pane")
+                self.trees_pane.add(self.fav_tree, height=200, sticky='nsew')            
+        elif config_val == 'False':
+            self.trees_pane.remove(self.fav_tree)
+
+    def launch_SimpleParser(self):
+        '''
+        Called when user selects "Run SimpleParser" in the menu.
+        '''
+        bcamp_api.SimpleParser(self.key_value, self)
+
     # FileOps Queue Methods
-    def update_progess_string(self, new_string):
+    def download_all_files(self, event=None):
         '''
-        Called when Gui.progress_string.value is updated,
-        which is passed to this method as *new_string*
-
-        Updates progress_strVar Tk Var which automatically
-        updates the Progress label.
+        bcamp_api call:
+        Querys the DB for all files in the remote location, and puts a 
+        'download' thread into the FileOpsQ for each one that is not present
+        in the local folder.
         '''
-        self.progress_strVar.set(new_string)
+        bcamp_api.download_all_files(self.key_value, self.file_queue, self)
 
-    def update_queue_string(self, new_string):
+    def upload_all_files(self, event=None):
         '''
-        Called when Gui.queue_string.value is updated,
-        which is passed to this method as *new_string*
-
-        Updates queue_strVar Tk Var which automatically
-        updates the Progress label.
+        bcamp_api call:
+        Querys the DB for all files in the local location, and puts a 
+        'upload' thread into the FileOpsQ for each one that is not present
+        in the remote folder.
         '''
-        self.queue_strVar.set(new_string)
+        bcamp_api.upload_all_files(self.key_value, self.file_queue, self)
 
-    def dnd_set_current(self, event):
-        self.listbox_dnd.dnd_cur_index = self.listbox_dnd.nearest(
-            self.event.y)
 
-    def dnd_shift_selection(self, event):
-        i = self.listbox_dnd.nearest(self.event.y)
-        if i < self.listbox_dnd.dnd_cur_index:
-            x = self.listbox_dnd.get(i)
-            self.listbox_dnd.delete(i)
-            self.listbox_dnd.insert(i+1, x)
-            self.listbox_dnd.dnd_cur_index = i
-        elif i > self.listbox_dnd.dnd_cur_index:
-            x = self.listbox_dnd.get(i)
-            self.listbox_dnd.delete(i)
-            self.listbox_dnd.insert(i-1, x)
-            self.listbox_dnd.dnd_cur_index = i
-
-    def show_QueueManager(self, event=None):
-        if self.frame_label_queue_state == "on":
-            self.queue_frame.grid_remove()
-            self.frame_label_queue_state = "off"
-            self.btn_show_queue['text'] = "˅"
-        else:
-            self.queue_frame.grid(
-                row=4,
-                column=0,
-                columnspan=3,
-                sticky="nsew"
-            )
-            self.frame_label_queue_state = "on"
-            self.btn_show_queue['text'] = "^"
 
     # Filebrowser Menu Class 
     class CustomTk_Filebrowser_Menu(tk.Menu):
@@ -5755,13 +6827,14 @@ class Tk_FileBrowser(tk.Frame):
         Predefined Filebrowser Menu, containing menu commands for the different
         file trees within the Tk_Filebrowser class.
         '''
-        def __init__(self, file_tree, ftype, parent_browser, case_masterFrame):
+        def __init__(self, file_tree, ftype, parent_browser, case_masterFrame, key_val):
             super().__init__()
             # Defining target file_tree
             self.tree = file_tree
             self.type = ftype
             self.parent_browser = parent_browser
             self.case_frame = case_masterFrame
+            self.key_val = key_val
             
             # Defining colors.
             self.blk100 = "#EFF1F3"
@@ -5843,6 +6916,11 @@ class Tk_FileBrowser(tk.Frame):
             self.add_cascade(
                 label="Automations",
                 menu=self.automations_menu
+            )
+            self.add_separator()
+            self.add_command(
+                label="Launch SimpleParser",
+                command=self.launch_SimpleParser             
             )
             self.add_separator()
 
@@ -6071,6 +7149,13 @@ class Tk_FileBrowser(tk.Frame):
             self.parent_browser.file_queue.put(remote_refresh)
             self.tree.selection_remove(self.tree.selection()[0])
 
+        # LEGACY
+        def launch_SimpleParser(self):
+            '''
+            Called when user selects "Run SimpleParser" in the menu.
+            '''
+            bcamp_api.SimpleParser(self.key_val, self.parent_browser)
+
 
 class Tk_CaseNotes(tk.Frame):
     '''
@@ -6100,11 +7185,10 @@ class Tk_CaseNotes(tk.Frame):
         # Setting Fonts for text_box
 
         self.def_font = tk_font.Font(
-            family="Consolas", size=10, weight="normal", slant="roman")
-        self.icon_font = tk_font.Font(
-            family="Consolas", size=16, weight="normal", slant="roman")
+            family="Segoe UI", size=10, weight="normal", slant="roman")
         self.text_font = tk_font.Font(
             family="Consolas", size=12, weight="normal", slant="roman")
+
         #TK Methods
         self.config_widgets()
         self.config_bindings()
@@ -6114,6 +7198,10 @@ class Tk_CaseNotes(tk.Frame):
         self.bind('<Control-s>', self.save_button)
 
     def config_widgets(self):
+        # Self config to prevent White flicker on resize.
+        self.config(
+            bg="#1e2629"
+        )
         self.notepad_top_frame = tk.Frame(
             self,
             background='#404b4d',
@@ -6148,6 +7236,7 @@ class Tk_CaseNotes(tk.Frame):
             foreground="#888888",
             relief="flat",
             anchor="center",
+            font=self.def_font
         )
         self.text_box = CustomTk_Textbox(
             self,
@@ -6187,19 +7276,14 @@ class Tk_CaseNotes(tk.Frame):
             command=self.search_sel_google
         )
 
-
-
-    
     def config_grid(self):
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
         self.notepad_top_frame.grid(row=0, column=0, sticky='ew')
         #top_frame_grid
         self.notepad_top_frame.columnconfigure(0, weight=1)
-        self.title_label.grid(row=0, column=0, padx=5, pady=3, sticky='ew')
-        self.save_button.grid(row=0, column=1, padx=3, pady=3, sticky='e')
-        #self.search_text.grid(row=0, column=1, sticky='e')
-        #self.search_text_btn.grid(row=0, column=2, sticky='e')
+        self.title_label.grid(row=0, column=0, padx=5, sticky='ew')
+        self.save_button.grid(row=0, column=1, padx=3, sticky='e')
         #/top_frame_grid
         self.text_box.grid(row=1, column=0, sticky='nsew')
 
@@ -6313,9 +7397,9 @@ class Tk_FileNotes(tk.Frame):
 
         # Setting Fonts for text_box
         self.def_font = tk_font.Font(
-            family="Consolas", size=10, weight="normal", slant="roman")
+            family="Segoe UI", size=10, weight="normal", slant="roman")
         self.text_font = tk_font.Font(
-            family="Consolas", size=12, weight="normal", slant="roman")
+            family="Segoe UI", size=12, weight="normal", slant="roman")
         
         #TK Methods
         self.config_widgets()
@@ -6339,16 +7423,6 @@ class Tk_FileNotes(tk.Frame):
             relief="flat",
             command=self.save_notes
         )
-        if self.log_viewer != None:
-            self.hide_button = tk.Button(
-                self.notepad_top_frame,
-                background='#404b4d',
-                foreground='#5b6366',
-                text="^",
-                font=self.def_font,
-                relief="flat",
-                command=self.log_viewer.show_file_notes
-            )
         self.search_text = tk.Entry(
             self.notepad_top_frame,
             background='#333333',
@@ -6390,10 +7464,8 @@ class Tk_FileNotes(tk.Frame):
         self.notepad_top_frame.grid(row=0, column=0, sticky='ew')
         #top_frame_grid
         self.notepad_top_frame.columnconfigure(1, weight=1)
-        if self.log_viewer != None:
-            self.hide_button.grid(row=0, column=0, padx=3, pady=3, sticky='w')
         self.title_label.grid(row=0, column=1, padx=5, sticky='ew')
-        self.save_button.grid(row=0, column=2, padx=3, pady=3, sticky='e')
+        self.save_button.grid(row=0, column=2, padx=3, sticky='e')
         #self.search_text_btn.grid(row=0, column=2, sticky='e')
         #/top_frame_grid
         self.text_box.grid(row=1, column=0, sticky='nsew')
@@ -6497,85 +7569,92 @@ class Tk_LogViewer(tk.Frame):
         self.show_search_intvar.set(0) # Default: Hidden
         self.selected_file = ""
         self.title = tk.StringVar()
-        self.title.set("*Select a file first* - LogViewer 0.1")
+        self.title.set("*Select a file first* - LogViewer")
+        self.subsearch_title = tk.StringVar()
+        self.subsearch_title.set("")
         self.case_frame = case_frame
+
+        # List Obj to store contents of 'selected_file' in order of line.
+        #   example> self.cur_filelines[32] = 'ln 32: Hello World'
+        self.cur_filelines = ['null-offset']
+
         # Removing auto-render when selecting file.
         #self.case_frame.fb_cur_sel.register_callback(self.open_selected_file)
+
         self.RPATH = root_path
 
-        # Setting Fonts for text_box.
-        self.def_font = tk_font.Font(
-            family="Consolas", size=10, weight="normal", slant="roman")
-        self.text_font = tk_font.Font(
-            family="Consolas", size=12, weight="normal", slant="roman")
-        
         #TK Methods
         self.config_widgets()
         self.config_bindings()
         self.config_grid()
 
     def config_widgets(self):
+        # Define Colors
+        self.spacer_col = "#10100B"
+        self.search_accnt = "#A6E22E"
+        self.basebg = "#404b4d"
+        self.basefg = "#B8C4C3"
+        self.textbox_bg = "#161C1F"
+        self.textbox_fg = "#EEEEEE"
+        self.textbox_cursor = "#E6CD4A"
+
+        # Setting Fonts
+        self.def_font = tk_font.Font(
+            family="Segoe UI", size=10, weight="normal", slant="roman")
+        self.def_font_bld = tk_font.Font(
+            family="Segoe UI", size=10, weight="bold", slant="roman")
+        self.text_font = tk_font.Font(
+            family="Consolas", size=12, weight="normal", slant="roman")
+
+        # Self config to prevent White flicker on resize.
+        self.config(
+            bg="#1e2629"
+        )
         self.notepad_top_frame = tk.Frame(
             self,
-            background='#404b4d',
+            background=self.basebg,
         )
         self.search_button = tk.Button(
             self.notepad_top_frame,
-            background='#404b4d',
-            foreground="#777777",
+            background=self.basebg,
+            foreground=self.basefg,
             relief="flat",
             text='⌕',
-            command=self.toggle_search_bar
+            command=self.toggle_search_bar,
+            font=self.def_font
         )
         self.title_label = tk.Label(
             self.notepad_top_frame,
             textvariable=self.title,
-            background='#404b4d',
-            foreground="#888888",
+            background=self.basebg,
+            foreground=self.basefg,
             relief="flat",
             anchor="center",
+            font=self.def_font
         )
-
         self.options_button = tk.Button(
             self.notepad_top_frame,
-            background='#404b4d',
-            foreground="#777777",
+            background=self.basebg,
+            foreground=self.basefg,
             relief="flat",
             text='☰',
             command=self.render_options_menu
         )
-
-        #self.file_notes_button = tk.Button(
-        #    self.notepad_top_frame,
-        #    text="Notes",
-        #    background='#404b4d',
-        #    foreground='#5b6366',
-        #    font=self.def_font,
-        #    command=self.show_file_notes,
-        #    relief='flat',
-        #)
-        #self.wordwrap_button = tk.Button(
-        #    self.notepad_top_frame,
-        #    text="Wrap",
-        #    background='#404b4d',
-        #    foreground='#5b6366',
-        #    font=self.def_font,
-        #    command=self.toggle_wordwrap,
-        #    relief='flat',
-        #)
         self.text_pane = tk.PanedWindow(
             self,
             orient='vertical',
             bd=0,
-            sashwidth=3
+            sashwidth=2,
+            bg=self.spacer_col
         )
         self.text_box_frame = tk.Frame(
-            self.text_pane
+            self.text_pane,
+            bg="#1e2629"
         )
         self.text_box = CustomTk_Textbox(
             self.text_box_frame,
-            background="#1e2629",
-            foreground="#CCCCCC",
+            background=self.textbox_bg,
+            foreground=self.textbox_fg,
             insertbackground="#ffffff", #Cursor, ugh TK Naming conventions...
             padx=10,
             pady=10,
@@ -6600,12 +7679,59 @@ class Tk_LogViewer(tk.Frame):
         )
         self.file_notes_frame = tk.Frame(
             self.text_pane,
-            background="#222222"
+            background=self.basebg
+        )
+        #Defining SearchFrame
+        self.subsearch_pane = tk.Frame(
+            self.text_pane,
+            bg="yellow"
+        )
+        self.subsearch_topbar = tk.Frame(
+            self.subsearch_pane,
+            background=self.basebg,
+        )
+        self.subsearch_title_label = tk.Label(
+            self.subsearch_topbar,
+            textvariable=self.subsearch_title,
+            background=self.basebg,
+            foreground=self.search_accnt,
+            relief="flat",
+            anchor="center",
+            font=self.def_font_bld
+        )
+        self.subsearch_baselabel = tk.Label(
+            self.subsearch_topbar,
+            text="SEARCH (ALL LINES) : ",
+            background=self.basebg,
+            foreground=self.basefg,
+            relief="flat",
+            anchor="center",
+            font=self.def_font
+        )
+        self.subseach_close = tk.Button(
+            self.subsearch_topbar,
+            background=self.basebg,
+            foreground=self.basefg,
+            relief="flat",
+            text='X',
+            command=self.close_subsearch_pane 
+        )
+        self.subsearch_textbox = CustomTk_Textbox(
+            self.subsearch_pane,
+            background=self.textbox_bg,
+            foreground=self.textbox_fg,
+            insertbackground=self.textbox_cursor, #Cursor, ugh TK Naming conventions...
+            padx=10,
+            pady=10,
+            wrap='word',
+            undo=True,
+            font=self.text_font,
+            relief='flat',
         )
         # Intialize Tk_CaseNotes
         self.file_notes = Tk_FileNotes(self.file_notes_frame, self.key_value, self.RPATH, self.case_frame, self)
         # Intialize Tk_LogSearchBar
-        self.search_bar = Tk_LogSearchBar(self.notepad_top_frame, self.key_value, self.text_box)
+        self.search_bar = Tk_LogSearchBar(self.notepad_top_frame, self.key_value, self)
 
         # Creating "Shortcuts Menu"
         self.sc_menu = tk.Menu(
@@ -6621,8 +7747,6 @@ class Tk_LogViewer(tk.Frame):
             command=self.search_sel_google
         )
 
-
-
     def config_grid(self):
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
@@ -6633,19 +7757,10 @@ class Tk_LogViewer(tk.Frame):
         self.notepad_top_frame.rowconfigure(1, weight=1)
         self.notepad_top_frame.columnconfigure(0, weight=1)
         self.notepad_top_frame.columnconfigure(1, weight=1)
-        self.title_label.grid(row=0, column=0, columnspan=2, padx=5, pady=3, sticky='ew')
-        #self.file_notes_button.grid(row=0, column=1, sticky='e')
-        #self.wordwrap_button.grid(row=0, column=2, padx=3, sticky='e')
+        self.title_label.grid(row=0, column=0, columnspan=2, padx=5, pady=2, sticky='ew')
         self.search_button.grid(row=0, column=2, padx=3, sticky='e')
         self.options_button.grid(row=0, column=3, padx=3, sticky='e')
         self.search_bar.grid(row=1, column=0, columnspan=4, sticky='ew')
-        # Hiding SearchBar
-        self.search_bar.grid_remove()
-
-        # File Notes grid.
-        self.file_notes_frame.rowconfigure(0, weight=1)
-        self.file_notes_frame.columnconfigure(0, weight=1)
-        self.file_notes.grid(row=0, column=0, sticky='nsew')
 
         # Text_box Frame
         self.text_box_frame.rowconfigure(0, weight=1)
@@ -6653,12 +7768,35 @@ class Tk_LogViewer(tk.Frame):
         self.text_box.grid(row=0, column=0, sticky='nsew')
         self.text_box_xsb.grid(row=1, column=0, sticky='ew')
         self.text_box_ysb.grid(row=0, column=1, rowspan=2, sticky='ns')
+
+        # Search SubFrame
+        self.subsearch_pane.rowconfigure(1, weight=1)
+        self.subsearch_pane.columnconfigure(0, weight=1)
+        self.subsearch_pane.columnconfigure(1, weight=1)
+        ## SubFrame TopBar
+        self.subsearch_topbar.grid(row=0, column=0, sticky='nsew', columnspan=2)
+        self.subsearch_topbar.columnconfigure(2, weight=1)
+        self.subsearch_baselabel.grid(row=0, column=0, sticky='nsew')
+        self.subsearch_title_label.grid(row=0, column=1, sticky='nsew')
+        self.subseach_close.grid(row=0, column=2, sticky='nse')
+        ## SubFrame Text Widget
+        self.subsearch_textbox.grid(row=1, column=0, sticky="nsew", columnspan=2)
+
+        # File Notes grid.
+        self.file_notes_frame.rowconfigure(0, weight=1)
+        self.file_notes_frame.columnconfigure(0, weight=1)
+        self.file_notes.grid(row=0, column=0, sticky='nsew')
+
         # Hiding Scrollbars
         self.text_box_xsb.grid_remove()
         self.text_box_ysb.grid_remove()
+        # Hiding SearchBar
+        self.search_bar.grid_remove()
 
-        # Paned Window
+        # Paned Window Config.
         self.text_pane.add(self.text_box_frame, sticky="nsew", stretch="always")
+        self.text_pane.add(self.subsearch_pane, sticky="nsew", stretch="always")
+        self.text_pane.paneconfigure(self.subsearch_pane, hide=True)
 
         # Options Menu
         self.options_menu = tk.Menu(
@@ -6682,10 +7820,13 @@ class Tk_LogViewer(tk.Frame):
     def config_bindings(self):
         self.text_box.bind("<Tab>", self.tabtext)
         self.text_box.bind("<Button-3>", self.popup_menu)
+        self.text_box.bind("<Control-f>", self.toggle_search_bar)
+        self.search_bar.search_entry.bind("<Control-f>", self.toggle_search_bar)
+        self.text_box.bind("<Control-w>", self.toggle_wordwrap)
+        
         #self.text_box.bind("<FocusIn>", self.set_focusIn_colors)
         #self.text_box.bind("<FocusOut>", self.set_focusOut_colors)
         #self.text_box.bind("<<TextModified>>", self.save_notify)
-        #self.text_box.bind("<Key>", lambda e: "break") # Readonly textbox
 
     def open_selected_file(self, fb_cur_sel):
         '''
@@ -6703,6 +7844,8 @@ class Tk_LogViewer(tk.Frame):
             self.title.set(trimmed_fname + " - LogViewer")
             # Clear TextBox Widget
             self.text_box.delete('1.0', tk.END)
+            # Flush cur_filelines
+            self.cur_filelines = ['null-offset']
             # Open File
             # Get file size, if less than *SIZE*, load at one,
             # otherwise, render line by line! For BIG log files...
@@ -6711,11 +7854,21 @@ class Tk_LogViewer(tk.Frame):
             if fsize <= 1024:
                 with open(fb_cur_sel, 'r', encoding='utf8') as f:
                     self.text_box.insert(tk.INSERT, f.read())
+                    # Iterate through .read() obj and save lines for search.
+                    print("$.sml_curf_ld", f.read())
+                    for line in f.read():
+                        print(".", line)
             else:
                 with open(fb_cur_sel, 'rb') as f:
                     for line in f:
                         self.text_box.insert(tk.END, line)
-                
+                        # Append to cur_filelines
+                        self.cur_filelines.append(line)
+            
+            # onrender search sets.
+            self.onrender_search('show', bg="red", fg="white", font=self.text_font)
+            # Refresh UI after changes
+            self.update_idletasks()
             print("Finishing 'open' thread - SUCCESS!")
         
         # Defining thread Var to check
@@ -6736,6 +7889,27 @@ class Tk_LogViewer(tk.Frame):
             # Clear TextBox Widget
             self.text_box.delete('1.0', tk.END)
             self.text_box.insert(tk.END, "Un-Supported File Type!\n\nHint: Hitting <Enter> will launch the default Windows Application for this file.")           
+
+    def onrender_search(self, target_str, bg, fg, font):
+        '''
+        Method to define keyword format searches.
+        '''
+        self.text_box.tag_configure(target_str, background=bg, foregound=fg)
+        start="1.0"
+        if len(target_str) > 0:
+            while True:
+                pos = self.text_box.search(
+                    pattern=target_str,
+                    index=start, 
+                    stopindex=tk.END,
+                    nocase=1,
+                    ) 
+                if pos == "": 
+                    break       
+                start = pos + "+%dc" % len(target_str) 
+                self.text_box.tag_add(target_str, pos, "%s + %dc" % (pos,len(target_str)))
+
+
 
     def show_file_notes(self):
         if self.show_notes_intvar.get() == 0: # Hidden *Default Value
@@ -6777,7 +7951,7 @@ class Tk_LogViewer(tk.Frame):
             self.show_ysb_intvar.set(0)
             self.text_box_ysb.grid_remove()
 
-    def toggle_search_bar(self):
+    def toggle_search_bar(self, event=None):
         if self.show_search_intvar.get() == 0: # Hidden *Default Value
             # Display the FileNotes Pane by "add"ing it.
             self.show_search_intvar.set(1)
@@ -6787,12 +7961,8 @@ class Tk_LogViewer(tk.Frame):
             # Hidding the FileNotes Pane by "remove"ing it.
             self.show_search_intvar.set(0)
             self.search_bar.grid_remove()
-            self.file_notes_button.config(
-                background='#404b4d',
-                foreground='#ffffff',
-            )
 
-    def toggle_wordwrap(self):
+    def toggle_wordwrap(self, event=None):
         if self.wordwrap_intvar.get() == 0: # Disabled
             # Update IntVar, and ENABLE wordwrap
             self.wordwrap_intvar.set(1)
@@ -6837,10 +8007,6 @@ class Tk_LogViewer(tk.Frame):
         except:
             pass
 
-
-
-
-
     def popup_menu(self, event):
         self.sc_menu.post(event.x_root + 10, event.y_root + 10)
 
@@ -6854,36 +8020,35 @@ class Tk_LogViewer(tk.Frame):
         print("content>", content)
         bcamp_api.search_w_google(content)
 
+    # Subsearch Pane Methods
+    def render_subsearch_pane(self):
+        self.text_pane.paneconfigure(self.subsearch_pane, hide=False)
+
+    def close_subsearch_pane(self):
+        '''
+        Called when user hits the 'close' button on the Subseach Topbar.
+        '''
+        self.text_pane.paneconfigure(self.subsearch_pane, hide=True)
+
 
 class Tk_LogSearchBar(tk.Frame):
     '''
     Default search bar shared by various "Log" focused panes such as 
     "LogViewer" or "CaseNotes"
     '''
-    def __init__(self, master, key_value, target_textbox):
+    def __init__(self, master, key_value, LogViewer):
         super().__init__(master=master)
         self.key_value = key_value
-        self.target_textbox = target_textbox
+        self.LogViewer = LogViewer
+        self.target_textbox = LogViewer.text_box
+        self.subpane_textbox = LogViewer.subsearch_textbox
         self.shown_match = 0
         self.total_match = 0
         self.match_count_stringvar = tk.StringVar()
         self.match_count_stringvar.set("No results") #Default/empty Val
 
-        self.blk100 = "#EFF1F3"
-        self.blk300 = "#B2B6BC"
-        self.blk400 = "#717479"
-        self.blk500 = "#1E1F21" ##
-        self.blk600 = "#15171C"
-        self.blk700 = "#0F1117"
-        self.blk900 = "#05070F"
-        self.act300 = "#D5A336"
-
-        self.sr_font = tk_font.Font(
-            family="Consolas", size=14, weight="bold", slant="roman")
-        self.mini_font = tk_font.Font(
-            family="Consolas", size=8, weight="bold", slant="italic")
-        self.sub_font = tk_font.Font(
-            family="Consolas", size=10, weight="normal", slant="roman")
+        # Directs if lines w/ matches will be sent to the search pane.
+        self.getall_enabled = False 
 
         # ONLY for frames. 
         #self.wm_overrideredirect(True) # Hide windows title_bar
@@ -6899,47 +8064,74 @@ class Tk_LogSearchBar(tk.Frame):
         #self.bind("<FocusOut>", self.on_focus_out)
         
     def config_widgets(self):
+        self.entrybg = "#1E1F21"
+        self.entryfg = "#EEEEEE"
+        self.basebg = "#404B4D"
+        self.basefg = "#EEEEEE"
+        self.enablebg = "#5F7073"
+        self.enablefg = "#EEEEEE"
+
+        self.def_font = tk_font.Font(
+            family="Segoe UI", size=10, weight="normal", slant="roman")
+        self.bold_font = tk_font.Font(
+            family="Segoe UI", size=10, weight="bold", slant="roman")
+        self.sym_font = tk_font.Font(
+            family="Segoe UI", size=10, weight="bold", slant="roman")
+
         self.configure(
-            background=self.blk400,
+            background=self.basebg,
         )
         self.search_entry = tk.Entry(
             self,
-            background=self.blk500,
-            foreground="#eeeeee",
-            insertbackground="#eeeeee",
+            background=self.entrybg,
+            foreground=self.entryfg,
+            insertbackground=self.entryfg,
             insertwidth=1,
-            relief='flat'
+            relief='flat',
+            font=self.def_font
         )
         self.match_count = tk.Label(
             self,
-            background=self.blk400,
-            foreground=self.blk500,
+            background=self.basebg,
+            foreground=self.basefg,
             textvariable=self.match_count_stringvar,
-            relief='flat'
+            relief='flat',
+            font=self.def_font
         )
         self.prev_match_button = tk.Button(
             self,
-            background=self.blk400,
-            foreground="#eeeeee",
+            background=self.basebg,
+            foreground=self.basefg,
             text="ᐱ",
             relief='flat',
-            command=self.prev_match
+            command=self.prev_match,
+            font=self.sym_font
         )
         self.next_match_button = tk.Button(
             self,
-            background=self.blk400,
-            foreground="#eeeeee",
+            background=self.basebg,
+            foreground=self.basefg,
             text="ᐯ",
             relief='flat',
-            command=self.next_match       
+            command=self.next_match,
+            font=self.sym_font  
+        )
+        self.get_all_btn = tk.Button(
+            self,
+            background=self.basebg,
+            foreground=self.basefg,
+            text="ALL",
+            relief='flat',
+            command=self.toggle_getall_matches 
         )
         self.exit_button = tk.Button(
             self,
-            background=self.blk400,
-            foreground="#eeeeee",
+            background=self.basebg,
+            foreground=self.basefg,
             text="X",
             relief='flat',
-            command=self.exit
+            command=self.exit,
+            font=self.sym_font
         )
 
     def config_bindings(self):
@@ -6955,10 +8147,11 @@ class Tk_LogSearchBar(tk.Frame):
 
         # Main Widgets
         self.search_entry.grid(row=0, column=0, padx=5, ipadx=2, ipady=2, sticky='ew')
-        self.match_count.grid(row=0, column=1, padx=2, sticky='ew')
-        self.prev_match_button.grid(row=0, column=2, padx=2, sticky='ew')
-        self.next_match_button.grid(row=0, column=3, padx=2, sticky='ew')
-        self.exit_button.grid(row=0, column=4, padx=2, sticky='ew')
+        self.get_all_btn.grid(row=0, column=1, sticky='w')
+        self.match_count.grid(row=0, column=2, padx=2, sticky='ew')
+        self.prev_match_button.grid(row=0, column=3, padx=2, sticky='ew')
+        self.next_match_button.grid(row=0, column=4, padx=2, sticky='ew')
+        self.exit_button.grid(row=0, column=5, padx=2, sticky='ew')
 
     def exit(self):
         '''
@@ -6970,33 +8163,57 @@ class Tk_LogSearchBar(tk.Frame):
         # Reset UI counters from previous search
         self.match_count_stringvar.set("...")
         self.shown_match = 0
+        self.match_lines = []
         # Begin Search Algo.
         searchEntry = self.search_entry
         self.target_textbox.tag_delete("search")
-        self.target_textbox.tag_configure("search", background="green")
+        self.target_textbox.tag_configure("search", background="#39494F", foregound="#1E1F21")
         start="1.0"
         if len(searchEntry.get()) > 0:
-            self.target_textbox.mark_set("insert", self.target_textbox.search(searchEntry.get(), start))
+            self.target_textbox.mark_set(
+                "insert",
+                self.target_textbox.search(
+                    pattern=searchEntry.get(),  # Pattern to search
+                    index=start,              # Starting Index of search
+                    nocase=1            # Makes Search Case-Insensitive
+                    )
+                )
+            
             self.target_textbox.see("insert")
             self.shown_match += 1
 
             while True:
-                pos = self.target_textbox.search(searchEntry.get(), start, tk.END) 
+                pos = self.target_textbox.search(
+                    pattern=searchEntry.get(),
+                    index=start, 
+                    stopindex=tk.END,
+                    nocase=1,
+                    ) 
                 if pos == "": 
                     break       
                 start = pos + "+%dc" % len(searchEntry.get()) 
                 self.target_textbox.tag_add("search", pos, "%s + %dc" % (pos,len(searchEntry.get())))
+                # Add resulting start/end position of matches to self.match_lines lst.
+                self.match_lines.append((pos, len(searchEntry.get())))
         
         # Count results and update Counter
         match_string_count = len(self.target_textbox.tag_ranges('search'))/2
         self.total_match = "{:n}".format(match_string_count)
         self.match_count_stringvar.set(str(self.shown_match) + " of " + str(self.total_match))
-        self.target_textbox.focus_set()
+
+        # Get lines with matches if getall enabled to send to subframe if enabled.
+        if self.getall_enabled:
+            self.gen_allmatches()
+            self.subpane_textbox.focus_set()
+        else:
+            self.target_textbox.focus_set()
 
     def next_match(self, event=None):
         if self.match_count_stringvar.get() == "No results": # Default/Empty
             return
 
+        # Take focus back.
+        self.target_textbox.focus_set()
         # move cursor to end of current match
         while (self.target_textbox.compare(tk.INSERT, "<", tk.END) and
             "search" in self.target_textbox.tag_names(tk.INSERT)):
@@ -7020,6 +8237,8 @@ class Tk_LogSearchBar(tk.Frame):
         if self.match_count_stringvar.get() == "No results": # Default/Empty
             return
 
+        # Take focus back.
+        self.target_textbox.focus_set()
         # move cursor to end of current match
         while (self.target_textbox.compare(tk.INSERT, ">", tk.END) and
             "search" in self.target_textbox.tag_names(tk.INSERT)):
@@ -7038,6 +8257,61 @@ class Tk_LogSearchBar(tk.Frame):
         # prevent default behavior, in case this was called
         # via a key binding
         return "break"
+
+    def toggle_getall_matches(self, event=None):
+        '''
+        Updates the Widget UI, and the 'getall_enabled' var.
+        '''
+        if self.getall_enabled:
+            # Reset var
+            self.getall_enabled = False
+            # Update UI.
+            self.get_all_btn['bg'] = self.basebg
+            self.get_all_btn['fg'] = self.basefg
+            self.get_all_btn['font'] = self.def_font
+        elif self.getall_enabled == False:
+            # Reset var
+            self.getall_enabled = True
+            # Update UI.
+            self.get_all_btn['bg'] = self.enablebg
+            self.get_all_btn['fg'] = self.enablefg
+            self.get_all_btn['font'] = self.bold_font
+
+    def gen_allmatches(self):
+        '''
+        Gets the line of each matched tag from the search, and passes the
+        lines to the 'LogViewer' subsearch pane text widget to be rendered.
+        '''
+        # Update Parent LogViewer UI
+        self.LogViewer.subsearch_title.set(self.search_entry.get())
+        self.LogViewer.render_subsearch_pane()
+        print("$.gen_allmatches")
+        # Get matchlines from recent_search.
+        print("$.pos_i", self.match_lines)
+        # Get lines from 'LogViewer.cur_filelines'
+        print("$.cur_lines", self.LogViewer.cur_filelines[2])
+
+        # Clear the textbox first before inserting new vals.
+        self.subpane_textbox.delete('1.0', tk.END)
+        self.subpane_textbox.tag_delete("search")
+        self.subpane_textbox.tag_configure("search", background="#39494F", foregound="#1E1F21")
+
+        line_index = 1
+        for match_set in self.match_lines: # [('10.2', 7), etc.]
+            raw_pos = match_set[0]  # '10.2' >> line=10, firstChar=2
+            search_len = match_set[1]   # 7 >> length of match.
+            # Get line from start_i val
+            src_linenum = int(raw_pos.split('.')[0])
+            # And get start/end char index for matches for later.
+            start_i = str(line_index) + '.' + str(int(raw_pos.split('.')[1]))
+            end_i = str(line_index) + '.' + str(int(raw_pos.split('.')[1]) + search_len)
+            # Now, Render lines into textbox based on new vars.
+            self.subpane_textbox.insert(tk.END, self.LogViewer.cur_filelines[src_linenum])
+            # And add tags using start and end vals for the current line.
+            self.subpane_textbox.tag_add("search", start_i, end_i)
+            line_index += 1
+
+
 
 
 '''

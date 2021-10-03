@@ -28,12 +28,20 @@ import threading
 import webbrowser
 import py_compile
 import subprocess
+import tkinter as tk
 from tkinter import filedialog
 
+
+
+'''
+[ GLOBAL API  CONSTANTS ]
+'''
 # GLOBAL BCAMP VERSION STRING
-BCAMP_VERSION = "DEV-Sep12"
+BCAMP_VERSION = "DEV-Sep22"
 # ROOT PATH CONSTANT FOR INSTALL DIR.
 BCAMP_ROOTPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
+# PROD. NAS PATH CONSTANT
+BCAMP_PRODNAS = r'\\dnvcorpvf2.corp.nai.org\nfs_dnvspr'
 
 
 ''' 
@@ -69,19 +77,25 @@ def gen_bcamp_config():
     '''
     # First, define values to be stored.
     global BCAMP_VERSION
+    global BCAMP_PRODNAS
+    global BCAMP_ROOTPATH
+
     version = BCAMP_VERSION
-    root_path = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
-    remote_root = r'\\dnvcorpvf2.corp.nai.org\nfs_dnvspr'
+    root_path = BCAMP_ROOTPATH
+    remote_root = BCAMP_PRODNAS
     download_root = root_path + r'\downloads'
     time_zone = str(time.tzname[0] + ":" + time.tzname[1])
     time_format = r"%m/%d/%y %H:%M"
     dev_mode = "False"
     notepad_path = r'C:\Program Files (x86)\Notepad++\notepad++.exe'
-    ui_start_res = "1366x800"
+    ui_start_res = "1600x900"
     ui_render_top_menu = "True"
     ui_caseviewer_location = "left"
     ui_render_caseviewer = "True"
-    user_texteditor = "logviewer"
+    ui_caseviewer_search_location = "top"
+    ui_render_caseviewer_search = "True"
+    ui_render_favtree = "True"
+    user_texteditor = "Logviewer"
 
     # Second, Execute the actual SQLite3 query.
     dbshell, dbcon = open_dbshell()
@@ -99,8 +113,11 @@ def gen_bcamp_config():
         ui_render_top_menu,
         ui_caseviewer_location,
         ui_render_caseviewer,
+        ui_caseviewer_search_location,
+        ui_render_caseviewer_search,
+        ui_render_favtree,
         user_texteditor)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);''',
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);''',
         (version,
         root_path,
         remote_root,
@@ -113,6 +130,9 @@ def gen_bcamp_config():
         ui_render_top_menu,
         ui_caseviewer_location,
         ui_render_caseviewer,
+        ui_caseviewer_search_location,
+        ui_render_caseviewer_search,
+        ui_render_favtree,
         user_texteditor))
 
     dbcon.commit() # Save changes
@@ -141,55 +161,8 @@ def update_config(column, value):
     print("SQLite3: *bcamp_config*:", column, "=", value)
 
 
-# ["favorite_files"] Table Queries
-def get_fav_files():
-    '''
-    Returns all files and paths with the favorite_files table.
-    '''
-    dbshell, dbcon = open_dbshell()
-    dbshell.execute("SELECT * FROM bcamp_favfiles;")
-    result = dbshell.fetchall()
-    dbcon.close()
-    return result
-
-def add_fav_file(key_val, file_path):
-    '''
-    Converts the full file_path into two parts, the filename and root path
-    *AFTER* the SR Number. The idea is to only the explicit path found to that
-    file for any SR. 
-
-    ex.) 4-XXX/logs/etc/favFile.log becomes logs/etc/favFile.log
-    '''
-    # Extract File Name from path
-    fname = os.path.basename(file_path)
-    # Extract root path without SR number/key_val
-    dir_path = os.path.dirname(file_path)
-    root_path = dir_path.replace(key_val, '', 1) # Only remove key_val once.
-
-    # Add to SQLite3 "favorite_files" table.
-    dbshell, dbcon = open_dbshell()
-    
-    dbshell.execute("""INSERT INTO bcamp_favfiles (file_name, root_path) 
-        VALUES (?,?);""", (fname, root_path))
-
-    dbcon.commit() # save changes
-    dbcon.close()
-    print("SQLite3: *bcamp_favfiles*:", fname, "added to DB.")
-
-def remove_fav_file(file_path):
-    '''
-    Removes row containing file name, and root path from the "favorite_files"
-    table.
-    '''
-    fname = os.path.basename(file_path)
-    dbshell, dbcon = open_dbshell()
-    dbshell.execute("DELETE FROM bcamp_favfiles WHERE file_name = (?);", (fname,))
-    dbcon.commit() # save changes
-    dbcon.close()
-
-
 # ["case"] Table Queries
-def new_import(new_import_dict):
+def new_import(new_import_dict, FileOpsQ):
     '''
     Creates a new row in the 'basecamp.cases' table, and generates the filesX
     table if the imported SR has uploads and/or local files. This is only 
@@ -397,16 +370,6 @@ def new_import(new_import_dict):
     # Update case record with files_table string.
     dbshell.execute("UPDATE cases SET files_table = (?) WHERE sr_number = (?)",
         (table_id, case['sr_number']))
-
-    # LEGACY*****
-    # # If remote or local files exist for SR, create an independent 
-    # # *sr_num*_files table
-    # if os.access(case['remote_path'], os.R_OK) or os.access(case['local_path'], os.R_OK):
-    #     table_id, files_table_query = create_files_table(case['sr_number'])
-    #     dbshell.execute(files_table_query)
-    #     # Update case record with files_table string.
-    #     dbshell.execute("UPDATE cases SET files_table = (?) WHERE sr_number = (?)",
-    #         (table_id, case['sr_number']))
  
     # Then populate it with results from set_files_snapshot here.
     # Remote files...
@@ -474,6 +437,15 @@ def new_import(new_import_dict):
     # Finally, close connection
     dbcon.commit()
     dbcon.close()
+
+    # Last, check if user defined download during import, and take action.
+    if new_import_dict['download_flag'] == 0:
+        pass # DO nothing.
+    elif new_import_dict['download_flag'] == 1:
+        # Send paths stored in DB to the FileOpsQueue.
+        #print("$.API>", query_all_files_column(case['sr_number'], 'path'))
+        for path in query_all_files_column(case['sr_number'], 'path'):
+            FileOpsQ.add_download(case['sr_number'], path)
 
 def drop_sr(key_val):
     '''
@@ -596,7 +568,6 @@ def update_case_record(key_val, new_values):
     
     # Then update record with new values
     if new_values['tags_list'] != None:
-        print("Updating tags record for " + key_val)
         for tag in new_values['tags_list']:
             dbshell.execute("""INSERT INTO tags(
                 tag,
@@ -606,8 +577,347 @@ def update_case_record(key_val, new_values):
 
     dbcon.commit() # Save changes
     dbcon.close() # Close connection
-    print(key_val, "*tags* table updated for", key_val)
+    print("SQLite3: *bcamp_tags*: updated for", key_val)
 
+def parse_filter_search(raw_query, cur_filterset):
+    '''
+    Seperates words by spaces unless they are encapsulated with ('),
+    and returns the results as a list.
+    '''
+    # Will be populated when the raw_query is parsed.
+    query_list = [] 
+    # Used for multiple strings seperated from the strip method to compile the
+    # full string back together for a clean query when the "expected" format
+    # is not used.
+    temp_str = ""
+    stripped_query = raw_query.strip() # Remove leading whitespace
+
+    # Seperate each string into a list.
+    q_items = stripped_query.split(" ") 
+
+    # And then iterate,format and append results to query_list
+    long_str_flag = False # sets if item -> temp_str [OR] -> query_list
+    for item in q_items:
+        if long_str_flag == False:
+            # Checking if this is a single query, or a long string 
+            # encapsulated by "'" that must be compiled
+            if "'" == item[0]:
+                # Start of new long string, clear previous compilation.
+                temp_str = "" 
+                temp_str = item.replace("'", "") # remove leading "'"
+                # Setting long_str mode to redirect results to the temp str 
+                # until we see an exit "'" to close the string.
+                long_str_flag = True
+            else: 
+                # Simply add as a 'custom' item in query_list.
+                formatted_query = item
+                query_list.append(formatted_query)
+
+        elif long_str_flag == True:
+            # Checking for an exit character
+            if "'" == item[-1]:
+                temp_str = temp_str + " " + item.replace("'", "")
+                # Setting long_str mode to redirect results to the temp str 
+                # until we see an exit "'" to close the string.
+                formatted_query = temp_str
+                query_list.append(formatted_query)
+                long_str_flag = False #exit long str mode on next iter in for.
+            else:
+                # item needs to be added to temp_str.
+                temp_str = temp_str + " " +  item
+    
+    cur_filterset['custom'] = cur_filterset['custom'] + query_list
+
+    return cur_filterset
+
+## [ Search Engine found in CaseViewer ]
+def search_cases(f_set):
+    '''
+    Parses the f_set provided from the CaseViewer.cur_filterset, searches
+    through the DB for the items defined, and returns a CaseViewer_index list
+    of the cases that should be shown that match
+
+    For specs. on the search engine behind User text into the Search entry,
+    see the 'custom_search' sub-method. 
+    '''
+    def account_search(target):
+        dbshell, dbcon = open_dbshell()
+        dbshell.execute("SELECT sr_number FROM cases WHERE account = (?);",
+            (target,))
+        raw_result = dbshell.fetchall()
+        dbcon.close()
+        # format results.
+        f_res = []
+        for item in raw_result:
+            f_res.append(item[0])
+        return f_res
+
+    def product_search(target):
+        dbshell, dbcon = open_dbshell()
+        dbshell.execute("SELECT sr_number FROM cases WHERE product = (?);",
+            (target,))
+        raw_result = dbshell.fetchall()
+        dbcon.close()
+        # format results.
+        f_res = []
+        for item in raw_result:
+            f_res.append(item[0])
+        return f_res
+        
+    def tag_search(target):
+        dbshell, dbcon = open_dbshell()
+        dbshell.execute("SELECT sr_number FROM tags WHERE tag = (?);",
+            (target,))
+        raw_result = dbshell.fetchall()
+        dbcon.close()
+        # format results.
+        f_res = []
+        for item in raw_result:
+            f_res.append(item[0])
+        return f_res
+
+    def custom_search(target):
+        '''
+        Search sub-method utilized for user-defined strings. This combines the
+        logic of the account, product, and tag search methods with changes the
+        actual queries used and some extra parsers methods. The "c_x_search"
+        variants use the SQLite3 'LIKE' exception, to return items that are 
+        partial string matches as well. 
+        '''
+        # [ SPECIAL SEARCH METHODS ONLY FOR CUSTOM STRINGS ]
+        ### SR Search for user SR submissions to return the submitted item.
+        def c_account_search(target):
+            dbshell, dbcon = open_dbshell()
+            dbshell.execute("SELECT sr_number FROM cases WHERE account LIKE ?;",
+                ('%'+target+'%',))
+            raw_result = dbshell.fetchall()
+            dbcon.close()
+            # format results.
+            f_res = []
+            for item in raw_result:
+                f_res.append(item[0])
+            return f_res
+
+        def c_product_search(target):
+            dbshell, dbcon = open_dbshell()
+            dbshell.execute("SELECT sr_number FROM cases WHERE product LIKE ?;",
+                ('%'+target+'%',))
+            raw_result = dbshell.fetchall()
+            dbcon.close()
+            # format results.
+            f_res = []
+            for item in raw_result:
+                f_res.append(item[0])
+            return f_res
+            
+        def c_tag_search(target):
+            dbshell, dbcon = open_dbshell()
+            dbshell.execute("SELECT sr_number FROM tags WHERE tag LIKE ?;",
+                ('%'+target+'%',))
+            raw_result = dbshell.fetchall()
+            dbcon.close()
+            # format results.
+            f_res = []
+            for item in raw_result:
+                f_res.append(item[0])
+            return f_res
+
+        def sr_search(target):
+            dbshell, dbcon = open_dbshell()
+            dbshell.execute("SELECT sr_number FROM cases WHERE sr_number = (?);",
+                (target,))
+            raw_result = dbshell.fetchall()
+            dbcon.close()
+            # format results.
+            f_res = []
+            for item in raw_result:
+                f_res.append(item[0])
+            return f_res
+        # [ /SPECIAL SEARCH METHODS ONLY FOR CUSTOM STRINGS ]        
+
+        # DRIVER CODE FOR 'custom_search'
+        # Send sample to each search module, and collect the results.
+        print("$>", target)
+        account_return = c_account_search(target)
+        product_return = c_product_search(target)
+        tag_return = c_tag_search(target)
+        sr_return = sr_search(target)
+
+        # Then add the list together to get a aggregate list of SR's.
+        aggregate_list = (
+            account_return 
+            + product_return 
+            + tag_return 
+            + sr_return
+        )
+
+        print("$aggr_lst", aggregate_list)
+        # Finally, return result to be filtered through...
+        return aggregate_list
+    
+    def filter_results(a_lst, p_lst, t_lst, c_lst):
+        '''
+        Returns a list of SR's that exist in ALL search results.
+
+        a_lst = Account Result List.
+        p_list = Product Result List.
+        t_lst = Tag Result List.
+        c_lst = Custom Result List.
+        '''
+        def noneIsInfinite(value):
+            if value is None:
+                return float("inf")
+            else:
+                return value
+
+        # First, get lengths of all result_list.
+        a_len = len(a_lst)
+        p_len = len(p_lst)
+        t_len = len(t_lst)
+        c_len = len(c_lst)
+
+        # Then check if the lengths are greater <= 1. Any list length that is
+        # 0 should be converted to None vals.``
+        if a_len == 0:
+            a_len = None
+        if p_len == 0:
+            p_len = None
+        if t_len == 0:
+            t_len = None
+        if c_len == 0:
+            c_len = None        
+        length_set = [a_len, p_len, t_len, c_len]  
+
+        # Determine which lst is the Smallest. 
+        min_val = min(length_set, key=noneIsInfinite)
+        min_index = length_set.index(min_val)
+        if min_index == 0:
+            smallest_set = a_lst
+        if min_index == 1:
+            smallest_set = p_lst
+        if min_index == 2:
+            smallest_set = t_lst
+        if min_index == 3:
+            smallest_set = c_lst
+
+        # Iterate through 'smallest_set' and compare items to items in
+        # sister list. 
+        return_list = []
+        for item in smallest_set:
+            # Account Test
+            if a_len != None:
+                if item in a_lst:
+                    a_litmus = True
+                else:
+                    a_litmus = False
+            else:
+                # Return true, set excluded.
+                a_litmus = True
+
+            # product Test
+            if p_len != None:
+                if item in p_lst:
+                    p_litmus = True
+                else:
+                    p_litmus = False
+            else:
+                # Return true, set excluded.
+                p_litmus = True
+
+            # Tag Test
+            if t_len != None:
+                if item in t_lst:
+                    t_litmus = True
+                else:
+                    t_litmus = False
+            else:
+                # Return true, set excluded.
+                t_litmus = True
+
+            #  Custom Test
+            if c_len != None:
+                if item in c_lst:
+                    c_litmus = True
+                else:
+                    c_litmus = False
+            else:
+                # Return true, set excluded.
+                c_litmus = True
+            
+            # Test if a,p,t,c litmus is true. 
+            if a_litmus and p_litmus and t_litmus and c_litmus:
+                print("ADDING...", item, " to RESULTS.")
+                return_list.append(item)
+            else:
+                # Item not in all list, to not add to results.
+                pass
+            
+        return return_list
+
+    account_res = []
+    product_res = []
+    tag_res = []
+    temp_custom_sets = []
+    custom_res = []
+
+    # Iterate through each key in the 'f_set' and see val to sub-methods to
+    # crawl through the DB.
+
+    for item in f_set['account']:
+        sr_set = account_search(item)
+        # Formatting sr_set list into result list
+        for item in sr_set:
+            account_res.append(item)
+
+    for item in f_set['product']:
+        sr_set = product_search(item)
+        # Formatting sr_set list into result list
+        for item in sr_set:
+            product_res.append(item)
+
+    for item in f_set['tag']:
+        sr_set = tag_search(item)
+        # Formatting sr_set list into result list
+        for item in sr_set:
+            tag_res.append(item)
+
+    for item in f_set['custom']:
+        sr_set = custom_search(item)
+        # Save results from all custom string matches to be filtered.
+        temp_custom_sets.append(sr_set)
+
+    if len(temp_custom_sets) > 1:
+        # Pre-filter custom results if user gives multiple strings.
+        # Get largest lst in temp_custom_sets, returns as (index, lst)
+        source_tup = max(enumerate(temp_custom_sets), key = lambda tup: len(tup[1]))
+        # Remove largest item from temp_sets.
+        temp_custom_sets.pop(source_tup[0])
+        # Only return matches that exist in both source_tup and iter lst.
+        for lst in temp_custom_sets:
+            for item in lst:
+                print("\n*****\n$item....", item)
+                print("$lst....", lst)
+                print("$...SOURCE", source_tup[1], "\n*****")
+                if item in source_tup[1]: # item in largest list.
+                    custom_res.append(item) 
+    elif len(temp_custom_sets) == 1: # Only single items in temp_set.
+        ## Formatting sr_set list into result list
+        for item in sr_set:
+            custom_res.append(item)
+
+    #print("** SEARCH RESULTS **")
+    #print("account>", account_res)
+    #print("product>", product_res)
+    #print("tag>", tag_res)
+    #print("custom>", custom_res)
+
+    # Checking results from ALL search list above, and appending SR's that are
+    # present in all list. 
+    
+    # First, determine what result set is the SMALLEST, we will iterate through
+    # this list and compare it to the others for the fastest comparison.
+
+    return filter_results(account_res, product_res, tag_res, custom_res)
 
 # ["tags"] Table Queries
 def insert_tags(key_val, tag):
@@ -657,6 +967,412 @@ Automations. This queue (FIFO) is global, meaning all open cases use the same
 queue. This is to optimize performance by reducing disk chaos.
 '''
 
+class FileOpsQueue:
+    '''
+    Master Queue for Unpack/Download operations for ALL filebrowsers.
+    '''
+    def __init__(self):
+        setup_log("fileops.log")
+        self.log_fileops = logging.getLogger('fileops.log')
+        self.q = queue.Queue()
+
+        # Vars used for Progressbar updates. Callbacks are registered in UI.
+        self.queue_size = 0
+        self.queue_callback = callbackVar()
+        self.progress_obj = callbackVar()
+
+        threading.Thread(target=self.worker_thread, name="FileOps-Daemon", daemon=True).start()
+
+    def worker_thread(self):
+        '''
+        Daemon Thread for FileOpsQueue
+        '''
+        self.log_fileops.info("STARTING FILEOPSQUEUE")
+        while True: # Infin. Loop
+            item = self.q.get()
+            print("$.fq", item)
+            item.start() # Starting thread_obj
+            # Enter nested while until 'item' thread is complete.
+            while item.is_alive():
+                time.sleep(1)
+            # Exit and go to next item in Queue if any.
+            self.q.task_done()
+
+            # Reduce queue_size by 1 if NOT refresh thread.
+            root_item_name = ((item.name).rsplit(":")[2]).strip()
+            if root_item_name != "local_refresh" or root_item_name != "remote_refresh":
+                if self.queue_size > 0:
+                    self.queue_size -= 1
+                else:
+                    self.queue_size = 0
+        
+            # self.Gui.fb_queue_string.value = str(self.queue_size) + ": Queue"
+            self.progress_obj.value = {'mode': None} # Clearing Complete.
+            self.queue_callback.value = self.queue_size
+
+    # Download Methods
+    def start_download(self, key_val, target_file):
+        '''
+        Logic for Download operations for Files.
+        '''
+        self.log_fileops.info("Launching 'FileOpsQueue.start_download'")
+
+        # Defining local vars for 'target_file'
+        file_name = os.path.basename(target_file)
+        size_mb = os.path.getsize(target_file)
+        local_dir = (get_config('download_root')
+            + "\\" + key_val)
+        full_local_path = local_dir + "\\" + file_name
+
+        # Checking if file already downloaded...
+        if os.access(full_local_path, os.R_OK):
+            self.log_fileops.info(file_name + " already Downloaded. Exiting...")
+            return
+
+        # Testing Local folder for existence
+        if os.access(local_dir, os.R_OK):
+            self.log_fileops.info("Local Dir for " + str(key_val) + " exist!")
+        else:
+            self.log_fileops.info("Local Dir for " + str(key_val) + " missing. Creating it...")
+            os.mkdir(local_dir)
+            self.log_fileops.info("Local Dir for " + str(key_val) + " created successfully!")
+
+
+        self.log_fileops.info("\n***\nSrc: " + target_file + "\nDst: " + full_local_path +"\n***")
+        self.log_fileops.info("Downloading [" + target_file + "] @ " + str(size_mb) + " bytes")
+        self.log_fileops.info("Local Path> " + full_local_path)
+        self.log_fileops.info("Remote Path> " + target_file)
+
+        # Downloading File HERE.
+        if os.path.isfile(target_file):
+            self.log_fileops.info("Type is FILE")
+            # *** TRACKING PROGRESS OF COPY ***
+            def update_progress_val(bytescopied):
+                ''' 
+                Creates download dictionary object
+                '''
+                update_dict = {
+                    'mode': 'download',
+                    'curbytes': bytescopied,
+                    'totalbytes': size_mb,
+                    'srcpath': os.path.abspath(target_file),
+                    'sr': key_val
+                }
+                # Update the progess object with the new value.
+                self.progress_obj.value = update_dict 
+        
+            # Open files in binary mode.
+            source_path = os.path.abspath(target_file)
+            dest_path = os.path.abspath(full_local_path)
+            fsrc = open(source_path, mode='rb') # read/binary mode
+            fdst = open(dest_path, mode='wb')   # write/binary mode
+
+            # *** COPYING HERE ***
+            self.copyfileobj(fsrc, fdst, update_progress_val)
+
+        # TODO - HOW DO YOU WANT TO TRACK DIR DOWNLOAD PROG?
+        elif os.path.isdir(target_file):
+            self.log_fileops.info("Type is DIR")
+            # *** OR HERE IF DIR ***
+            shutil.copytree(target_file, full_local_path)
+        
+        # Clean-up/Last Words.
+        self.log_fileops.info(file_name + " Downloaded Successfully!")
+        self.log_fileops.info("Exiting 'FileOpsQueue.start_download'")
+    
+    def add_download(self, key_val, target_path):
+        '''
+        Converts 'input' to a thread object, and then puts it into the 
+        'worker_thread' Daemon via self.q.put(X)
+        '''
+        #Getting base file name of target_file
+        file_name = os.path.basename(target_path)
+        #Converting to thread obj with args.
+        thread_obj = threading.Thread(target=self.start_download, 
+            args=(key_val, target_path),
+            name=("download::" + key_val + "::" + file_name))
+        self.q.put(thread_obj)
+        #increment queue_size 
+        self.queue_size += 1
+        self.queue_callback.value = self.queue_size
+    
+    # Upload Methods
+    def start_upload(self, key_val, target_file):
+        '''
+        Logic for Upload operations for Files.
+        '''
+        self.log_fileops.info("Launching 'FileOpsQueue.start_upload'")
+
+        # Defining Remote path of target_file.
+        file_name = os.path.basename(target_file)
+        remote_dir = (get_config("remote_root")
+            + "\\" + key_val)
+        full_remote_path = remote_dir + "\\" + file_name
+
+        # Checking if file already uploaded...
+        if os.access(full_remote_path, os.R_OK):
+            self.log_fileops.info(file_name + " already Uploaded. Exiting...")
+            return
+
+        # Testing Remote folder for existence
+        if os.access(remote_dir, os.R_OK):
+            self.log_fileops.info("Remote Dir for " + str(key_val) + " exist!")
+        else:
+            self.log_fileops.info("Remote Dir for " + str(key_val) + " missing. Creating it...")
+            os.mkdir(remote_dir)
+            self.log_fileops.info("Remote Dir for " + str(key_val) + " created successfully!")
+
+
+        self.log_fileops.info("\n***\nSrc: " + target_file + "\nDst: " + full_remote_path +"\n***")
+        size_mb = os.path.getsize(target_file)
+        self.log_fileops.info("Uploading [" + target_file + "] @ " + str(size_mb) + " bytes")
+        self.log_fileops.info("Local Path> " + full_remote_path)
+        self.log_fileops.info("Remote Path> " + target_file)
+
+        # shutil.copy2 for files, shutil.copytree for Dirs.
+        # Upload use shutil.copy2 - preserve metadata.
+        if os.path.isfile(target_file):
+            self.log_fileops.info("Type is FILE")
+            # NOTE LEGACY/shutil.copy2(target_file, full_remote_path)
+
+            # *** TRACKING PROGRESS OF COPY ***
+            def update_progress_val(bytescopied):
+                ''' Creates upload dictionary object
+                '''
+                update_dict = {
+                    'mode': 'upload',
+                    'curbytes': bytescopied,
+                    'totalbytes': size_mb,
+                    'srcpath': os.path.abspath(target_file),
+                    'sr': key_val
+                }
+                # Updating with Gui w/ update dictionary
+                self.progress_obj.value = update_dict 
+        
+            # Open files in binary mode.
+            source_path = os.path.abspath(target_file)
+            dest_path = os.path.abspath(full_remote_path)
+            fsrc = open(source_path, mode='rb') # read/binary mode
+            fdst = open(dest_path, mode='wb')   # write/binary mode
+
+            # *** COPYING HERE ***
+            self.copyfileobj(fsrc, fdst, update_progress_val)
+
+        # TODO - HOW DO YOU WANT TO TRACK DIR Upload PROG?
+        elif os.path.isdir(target_file):
+            self.log_fileops.info("Type is DIR")
+            # *** OR HERE IF DIR ***
+            shutil.copytree(target_file, full_remote_path)
+        
+        # Clean-up/Last Words.
+        self.log_fileops.info(file_name + " Uploaded Successfully!")
+        self.log_fileops.info("Exiting 'FileOpsQueue.start_upload'")
+
+    def add_upload(self, key_val, target_path):
+        '''
+        Converts 'input' to a thread object, and then puts it into the 
+        'worker_thread' Daemon via self.q.put(X)
+        '''
+        #Getting base file name of target_file
+        file_name = os.path.basename(target_path)
+        #Converting to thread obj with args.
+        thread_obj = threading.Thread(target=self.start_upload, 
+            args=(key_val, target_path),
+            name=("download::" + key_val + "::" + file_name))
+        self.q.put(thread_obj)
+        #increment queue_size 
+        self.queue_size += 1
+        self.queue_callback.value = self.queue_size
+        #self.Gui.fb_queue_string.value = str(self.queue_size) + " : Queue"
+
+    # Automation methods
+    def add_automation(self, key_val, iid, target_automation):
+        '''
+        Converts 'input' to a thread object, and then puts it into the 
+        'worker_thread' Daemon via self.q.put(X)
+        '''
+
+        def unpack_automation(key_val, iid, target_automation):
+            '''
+            If target_automation type is "unpack", this method is called.
+
+            This checks the existence of previously unpacked files based on 
+            the IID (Explicit path) provided from the file browser - and
+            determine if the automation needs to be ran, or if the work is
+            already complete.
+            '''
+            # Defining Vars based on key_val.
+            file_name = os.path.basename(iid)
+            remote_path = query_sr(key_val, 'remote_path')
+            local_path = query_sr(key_val, 'local_path')
+            full_remote_path = remote_path + "\\" + os.path.splitext(file_name)[0]
+            full_local_path = local_path + "\\" + file_name
+
+            # First, test Remote Result folder for existence
+            if os.access(full_remote_path, os.R_OK):
+                self.log_fileops.info(key_val + "/" + file_name + " has already been unpacked! Exiting...")
+                # TODO HOW TO HANDLE ALREADY UNPACKED - TAKE USER TO FILE?")
+                return
+            
+            # Second, test Local folder for existence
+            if os.access(local_path, os.R_OK):
+                self.log_fileops.info("Local Dir for " + str(key_val) + " exist!")
+            else:
+                self.log_fileops.info("Local Dir for " + str(key_val) + " missing. Creating it...")
+                os.mkdir(local_path)
+                self.log_fileops.info("Local Dir for " + str(key_val) + " created successfully!")
+
+            # Third, Test for file existence in local folder
+            self.log_fileops.info("Checking if file already downloaded...")
+            unpacked_path = os.path.splitext(full_local_path)[0]
+            if os.access(unpacked_path, os.R_OK):
+                self.log_fileops.info(file_name + " has already been UNPACKED.")
+                self.log_fileops.info("Exiting 'start_automation'")
+                return
+            elif os.access(full_local_path, os.R_OK):
+                self.log_fileops.info(file_name + " has already been DOWNLOADED.")
+            else:
+                downloadFirst = query_automation(target_automation, 'downloadFirst')
+                if downloadFirst == '1':
+                    print("Starting download. TARGET:", full_remote_path)
+                    self.add_download(key_val, iid)
+    
+            # Finally, start the automation
+                thread_obj = threading.Thread(target=self.start_automation, 
+                    args=(key_val, iid, target_automation),
+                    name=(key_val 
+                        + "::" 
+                        + target_automation
+                        + "::" 
+                        + os.path.basename(iid)))
+                self.q.put(thread_obj)
+                # Increment Queue Size
+                self.queue_size += 1
+                self.queue_callback.value = self.queue_size         
+
+
+        def custom_automation(key_val, iid, target_automation):
+            '''
+            If the automation type is "custom", this method is called.
+
+            Different from "unpack" types, these automations are not placed
+            into the FileOps queue, but are called in individual child threads
+            to complete the defined task. Use case for this type would be
+            automations that do not need to download or extract the contents 
+            of a target file - such as sending a file to a rep-lab.
+            '''
+            print("Would launch custom_auto w/ : ",  key_val, iid, target_automation)
+
+        # Determine Automation 'type' by querying DB
+        auto_type = query_automation(target_automation, 'type')
+      
+        # If type is "unpack" - send to unpack method.
+        if auto_type == "unpack":
+            unpack_automation(key_val, iid, target_automation)
+        elif auto_type == "custom":
+            custom_automation(key_val, iid, target_automation)
+
+    def start_automation(self, key_val, iid, target_automation):
+        '''
+        Threaded process that is called when a user selects "Unpack"
+        for a supported file type. 
+        '''
+        self.log_fileops.info("Launching 'FileOpsQueue.start_automation'")
+        
+        # Update Progressbar String
+        update_dict = {
+            'mode': 'automation',
+            'srcpath': os.path.abspath(iid),
+            'sr': key_val
+        }
+        # Updating Gui w/ update dictionary
+        self.progress_obj.value = update_dict
+
+        # Defining Vars
+        file_name = os.path.basename(iid)
+        local_path = query_sr(key_val, 'local_path')
+        file_local_path = local_path + "\\" + file_name
+        automation_path = query_automation(target_automation, 'py_path')
+        binary_exe_list = query_automation(target_automation, 'exe_paths')
+        
+        # Converting 'binary_exe_list' to Python list obj
+        # That will be passed as a var from the 
+        automation_exe_list = pickle.loads(binary_exe_list)
+        
+        # Importing the target automation Module
+        self.log_fileops.info("Importing " + target_automation)
+        spec = importlib.util.spec_from_file_location(
+            (target_automation), automation_path)
+        automation_py = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(automation_py)
+
+        # Starting the automation.run() main method.
+        self.log_fileops.info("Start your engines " + target_automation + "!")
+        print("$.lst", automation_exe_list)
+        automation_py.run(iid, file_local_path, automation_exe_list)
+
+    ## ADDING FROM STACK - Get percentage complete based on src/dst size.
+    # https://stackoverflow.com/questions/29967487/get-progress-back-from-shutil-file-copy-thread
+    def copyfileobj(self, fsrc, fdst, callback, length=0):
+        try:
+            # check for optimisation opportunity
+            if "b" in fsrc.mode and "b" in fdst.mode and fsrc.readinto:
+                return self._copyfileobj_readinto(fsrc, fdst, callback, length)
+        except AttributeError:
+            # one or both file objects do not support a .mode or .readinto attribute
+            pass
+
+        if not length:
+            length = shutil.COPY_BUFSIZE
+
+        fsrc_read = fsrc.read
+        fdst_write = fdst.write
+
+        copied = 0
+        while True:
+            buf = fsrc_read(length)
+            if not buf:
+                break
+            fdst_write(buf)
+            copied += len(buf)
+            callback(copied)
+
+    def _copyfileobj_readinto(self, fsrc, fdst, callback, length=0):
+        """readinto()/memoryview() based variant of copyfileobj().
+        *fsrc* must support readinto() method and both files must be
+        open in binary mode.
+        """
+        # differs from shutil.COPY_BUFSIZE on platforms != Windows
+        READINTO_BUFSIZE = 1024 * 1024
+
+        fsrc_readinto = fsrc.readinto
+        fdst_write = fdst.write
+
+        if not length:
+            try:
+                file_size = os.stat(fsrc.fileno()).st_size
+            except OSError:
+                file_size = READINTO_BUFSIZE
+            length = min(file_size, READINTO_BUFSIZE)
+
+        copied = 0
+        with memoryview(bytearray(length)) as mv:
+            while True:
+                n = fsrc_readinto(mv)
+                if not n:
+                    break
+                elif n < length:
+                    with mv[:n] as smv:
+                        fdst.write(smv)
+                else:
+                    fdst_write(mv)
+                copied += n
+                callback(copied)
+
+    def put(self, item):
+        self.q.put(item)
+
+# General Methods used by the UI
 def generate_file_record(self, key_val):
     '''
     Threaded generator that scans the remote, local paths in order of nested
@@ -989,6 +1705,66 @@ def open_in_windows(file_path):
     except OSError:
         print("*bcamp_api*: WINDOWS ERROR - No default application associated.")
 
+def refresh_filetrees(key_val, FileBrowser):
+    '''
+    Refreshes the File-Trees with an independent thread not in the FileOpsQ.
+    '''
+    remote_refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('remote', False),
+            name=(FileBrowser.key_value + "::remote_refresh")
+        )
+    local_refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('local', False),
+            name=(FileBrowser.key_value + "::remote_refresh")
+        )
+    # Starting threads together.
+    remote_refresh_thread.start()
+    local_refresh_thread.start()
+
+def download_all_files(key_val, FileOpsQ, FileBrowser):
+    '''
+    Querys the DB for all files in the remote location, and puts a 'download' 
+    thread into the FileOpsQ for each one that is not present in the local 
+    folder. The FileBrowser is passed so we can refresh the UI after each
+    download.
+    '''
+    # Get all file paths in remote folder saved in DB.
+    lfiles = query_all_files_remote_depth(key_val, 'path', 0)
+    print("$api.", lfiles)
+    # Iter. paths and submit using FOQ
+    for fpath in lfiles:
+        FileOpsQ.add_download(key_val, fpath)
+        # Now add refresh to update UI
+        refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('local', False),
+            name=(FileBrowser.key_value + "::local_refresh")
+        )
+        FileOpsQ.put(refresh_thread)
+
+def upload_all_files(key_val, FileOpsQ, FileBrowser):
+    '''
+    Querys the DB for all files in the local location, and puts a 'upload' 
+    thread into the FileOpsQ for each one that is not present in the remote 
+    folder. The FileBrowser is passed so we can refresh the UI after each
+    upload.
+    '''
+    # Get all file paths in remote folder saved in DB.
+    lfiles = query_all_files_local_depth(key_val, 'path', 0)
+    print("$api.", lfiles)
+    # Iter. paths and submit using FOQ
+    for fpath in lfiles:
+        FileOpsQ.add_upload(key_val, fpath)
+        # Now add refresh to update UI
+        refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('remote', False),
+            name=(FileBrowser.key_value + "::remote_refresh")
+        )
+        FileOpsQ.put(refresh_thread)
+
 # ["files_X"] Table Queries 
 def create_files_table(key_val):
     '''
@@ -1091,10 +1867,131 @@ def query_all_files(key_val):
     dbcon.close()
     return result # Results are tuples containing all columns per tuple.
 
+def query_all_files_column(key_val, column):
+    '''
+    Returns a list of the value found in 'column' for a target 'key_val' 
+    in the 'filesX' table of the DB.
+    '''
+    # Remove "-" from key_val
+    form_key_val = str(key_val).replace("-", "")
+    table_name = "files" + form_key_val
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " + column + " FROM " + table_name + " ;")
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Correct result formatting into a direct list obj.
+    final_result = []
+    for item in result:
+        final_result.append(item[0])
+
+    return final_result # Results are tuples containing all columns per tuple.
+
+def query_all_files_local(key_val, column):
+    '''
+    Returns a list of the value found in 'column' for a target 'key_val' 
+    in the 'filesX' table of the DB filtered by local files ONLY.
+    '''
+    # Remove "-" from key_val
+    form_key_val = str(key_val).replace("-", "")
+    table_name = "files" + form_key_val
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " 
+        + column 
+        + " FROM " 
+        + table_name 
+        + " WHERE location = (?) ;",
+        ('local',))
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Correct result formatting into a direct list obj.
+    final_result = []
+    for item in result:
+        final_result.append(item[0])
+
+    return final_result # Results are tuples containing all columns per tuple.
+
+def query_all_files_remote(key_val, column):
+    '''
+    Returns a list of the value found in 'column' for a target 'key_val' 
+    in the 'filesX' table of the DB filtered by remote files ONLY.
+    '''
+    # Remove "-" from key_val
+    form_key_val = str(key_val).replace("-", "")
+    table_name = "files" + form_key_val
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " 
+        + column 
+        + " FROM " 
+        + table_name 
+        + " WHERE location = (?) ;",
+        ('remote',))
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Correct result formatting into a direct list obj.
+    final_result = []
+    for item in result:
+        final_result.append(item[0])
+
+    return final_result # Results are tuples containing all columns per tuple.
+
+def query_all_files_local_depth(key_val, column, depth):
+    '''
+    Returns a list of the value found in 'column' for a target 'key_val' 
+    in the 'filesX' table of the DB filtered by local files and provided
+    depth index.
+
+    depth=0 returns root local files.
+    '''
+    # Remove "-" from key_val
+    form_key_val = str(key_val).replace("-", "")
+    table_name = "files" + form_key_val
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " 
+        + column 
+        + " FROM " 
+        + table_name 
+        + " WHERE location = (?) AND depth_index = (?);",
+        ('local', depth))
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Correct result formatting into a direct list obj.
+    final_result = []
+    for item in result:
+        final_result.append(item[0])
+
+    return final_result # Results are tuples containing all columns per tuple.
+
+def query_all_files_remote_depth(key_val, column, depth):
+    '''
+    Returns a list of the value found in 'column' for a target 'key_val' 
+    in the 'filesX' table of the DB filtered by remote files and provided
+    depth index.
+
+    depth=0 returns root remote files.
+    '''
+    # Remove "-" from key_val
+    form_key_val = str(key_val).replace("-", "")
+    table_name = "files" + form_key_val
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " 
+        + column 
+        + " FROM " 
+        + table_name 
+        + " WHERE location = (?) AND depth_index = (?);",
+        ('remote', depth))
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Correct result formatting into a direct list obj.
+    final_result = []
+    for item in result:
+        final_result.append(item[0])
+
+    return final_result # Results are tuples containing all columns per tuple.
+
 def query_all_files_formatted(key_val):
     '''
     TODO 
-    
+
     Returns ALL rows and values for each file in key_val in order of file
     'depth_index' with 0 = root, and '3' representing files found 3 dirs deep
     in ANY parent file. Tk_Filebrowser handles putting the correct files under
@@ -1142,407 +2039,51 @@ def query_dump_notes(key_val, column):
     dbcon.close()
     return result # Results are tuples containing all columns per tuple.
 
-
-class FileOpsQueue:
+# ["favorite_files"] Table Queries
+def get_fav_files():
     '''
-    Master Queue for Unpack/Download operations for ALL filebrowsers.
+    Returns all files and paths with the favorite_files table.
     '''
-    def __init__(self, Gui):
-        setup_log("fileops.log")
-        self.Gui = Gui
-        self.log_fileops = logging.getLogger('fileops.log')
-        self.q = queue.Queue()
-        self.queue_size = 0
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT * FROM bcamp_favfiles;")
+    result = dbshell.fetchall()
+    dbcon.close()
+    return result
 
-        threading.Thread(target=self.worker_thread, name="FileOps-Daemon", daemon=True).start()
+def add_fav_file(key_val, file_path):
+    '''
+    Converts the full file_path into two parts, the filename and root path
+    *AFTER* the SR Number. The idea is to only the explicit path found to that
+    file for any SR. 
 
-    def worker_thread(self):
-        '''
-        Daemon Thread for FileOpsQueue
-        '''
-        self.log_fileops.info("STARTING FILEOPSQUEUE")
-        while True: # Infin. Loop
-            item = self.q.get()
-            #self.log_fileops.info(f'Working on {item}')
-            item.start() # Starting thread_obj
-            while item.is_alive():
-                time.sleep(1)
-            #self.log_fileops.info(f'Finished {item}')
-            self.q.task_done()
+    ex.) 4-XXX/logs/etc/favFile.log becomes logs/etc/favFile.log
+    '''
+    # Extract File Name from path
+    fname = os.path.basename(file_path)
+    # Extract root path without SR number/key_val
+    dir_path = os.path.dirname(file_path)
+    root_path = dir_path.replace(key_val, '', 1) # Only remove key_val once.
 
-            # Reduce queue_size by 1 if NOT refresh thread.
-            root_item_name = ((item.name).rsplit(":")[2]).strip()
-            print("    >", root_item_name)
-            if root_item_name != "local_refresh" or root_item_name != "remote_refresh":
-                if self.queue_size > 0:
-                    self.queue_size -= 1
-                else:
-                    self.queue_size = 0
-        
-            self.Gui.fb_queue_string.value = str(self.queue_size) + ": Queue"
-            self.Gui.fb_progress_val.value = {'mode': None} # Clearing Complete.
-
-    def add_download(self, key_val, target_path):
-        '''
-        Converts 'input' to a thread object, and then puts it into the 
-        'worker_thread' Daemon via self.q.put(X)
-        '''
-        #Getting base file name of target_file
-        file_name = os.path.basename(target_path)
-        #Converting to thread obj with args.
-        thread_obj = threading.Thread(target=self.start_download, 
-            args=(key_val, target_path),
-            name=("download::" + key_val + "::" + file_name))
-        self.q.put(thread_obj)
-        #increment queue_size 
-        self.queue_size += 1
-        self.Gui.fb_queue_string.value = str(self.queue_size) + " : Queue"
+    # Add to SQLite3 "favorite_files" table.
+    dbshell, dbcon = open_dbshell()
     
-    def add_upload(self, key_val, target_path):
-        '''
-        Converts 'input' to a thread object, and then puts it into the 
-        'worker_thread' Daemon via self.q.put(X)
-        '''
-        #Getting base file name of target_file
-        file_name = os.path.basename(target_path)
-        #Converting to thread obj with args.
-        thread_obj = threading.Thread(target=self.start_upload, 
-            args=(key_val, target_path),
-            name=("download::" + key_val + "::" + file_name))
-        self.q.put(thread_obj)
-        #increment queue_size 
-        self.queue_size += 1
-        self.Gui.fb_queue_string.value = str(self.queue_size) + " : Queue"
+    dbshell.execute("""INSERT INTO bcamp_favfiles (file_name, root_path) 
+        VALUES (?,?);""", (fname, root_path))
 
-    def start_download(self, key_val, target_file):
-        '''
-        Logic for Download operations for Files.
-        '''
-        self.log_fileops.info("Launching 'FileOpsQueue.start_download'")
+    dbcon.commit() # save changes
+    dbcon.close()
+    print("SQLite3: *bcamp_favfiles*:", fname, "added to DB.")
 
-        # Defining local path of target_file.
-        file_name = os.path.basename(target_file)
-        local_dir = (get_config('download_root')
-            + "\\" + key_val)
-        full_local_path = local_dir + "\\" + file_name
-
-        # Checking if file already downloaded...
-        if os.access(full_local_path, os.R_OK):
-            self.log_fileops.info(file_name + " already Downloaded. Exiting...")
-            return
-
-        # Testing Local folder for existence
-        if os.access(local_dir, os.R_OK):
-            self.log_fileops.info("Local Dir for " + str(key_val) + " exist!")
-        else:
-            self.log_fileops.info("Local Dir for " + str(key_val) + " missing. Creating it...")
-            os.mkdir(local_dir)
-            self.log_fileops.info("Local Dir for " + str(key_val) + " created successfully!")
-
-
-        self.log_fileops.info("\n***\nSrc: " + target_file + "\nDst: " + full_local_path +"\n***")
-        size_mb = os.path.getsize(target_file)
-        self.log_fileops.info("Downloading [" + target_file + "] @ " + str(size_mb) + " bytes")
-        self.log_fileops.info("Local Path> " + full_local_path)
-        self.log_fileops.info("Remote Path> " + target_file)
-
-        # shutil.copy2 for files, shutil.copytree for Dirs.
-        # Download use shutil.copy2 - preserve metadata.
-        if os.path.isfile(target_file):
-            self.log_fileops.info("Type is FILE")
-            # NOTE LEGACY/shutil.copy2(target_file, full_local_path)
-
-            # *** TRACKING PROGRESS OF COPY ***
-            def update_progress_val(bytescopied):
-                ''' Creates download dictionary object
-                '''
-                update_dict = {
-                    'mode': 'download',
-                    'curbytes': bytescopied,
-                    'totalbytes': size_mb,
-                    'srcpath': os.path.abspath(target_file),
-                    'sr': key_val
-                }
-                # Updating with Gui w/ update dictionary
-                self.Gui.fb_progress_val.value = update_dict 
-        
-            # Open files in binary mode.
-            source_path = os.path.abspath(target_file)
-            dest_path = os.path.abspath(full_local_path)
-            fsrc = open(source_path, mode='rb') # read/binary mode
-            fdst = open(dest_path, mode='wb')   # write/binary mode
-
-            # *** COPYING HERE ***
-            self.copyfileobj(fsrc, fdst, update_progress_val)
-
-        # TODO - HOW DO YOU WANT TO TRACK DIR DOWNLOAD PROG?
-        elif os.path.isdir(target_file):
-            self.log_fileops.info("Type is DIR")
-            # *** OR HERE IF DIR ***
-            shutil.copytree(target_file, full_local_path)
-        
-        # Clean-up/Last Words.
-        self.log_fileops.info(file_name + " Downloaded Successfully!")
-        self.log_fileops.info("Exiting 'FileOpsQueue.start_download'")
-
-    def start_upload(self, key_val, target_file):
-        '''
-        Logic for Upload operations for Files.
-        '''
-        self.log_fileops.info("Launching 'FileOpsQueue.start_upload'")
-
-        # Defining Remote path of target_file.
-        file_name = os.path.basename(target_file)
-        remote_dir = (get_config("remote_root")
-            + "\\" + key_val)
-        full_remote_path = remote_dir + "\\" + file_name
-
-        # Checking if file already uploaded...
-        if os.access(full_remote_path, os.R_OK):
-            self.log_fileops.info(file_name + " already Uploaded. Exiting...")
-            return
-
-        # Testing Remote folder for existence
-        if os.access(remote_dir, os.R_OK):
-            self.log_fileops.info("Remote Dir for " + str(key_val) + " exist!")
-        else:
-            self.log_fileops.info("Remote Dir for " + str(key_val) + " missing. Creating it...")
-            os.mkdir(remote_dir)
-            self.log_fileops.info("Remote Dir for " + str(key_val) + " created successfully!")
-
-
-        self.log_fileops.info("\n***\nSrc: " + target_file + "\nDst: " + full_remote_path +"\n***")
-        size_mb = os.path.getsize(target_file)
-        self.log_fileops.info("Uploading [" + target_file + "] @ " + str(size_mb) + " bytes")
-        self.log_fileops.info("Local Path> " + full_remote_path)
-        self.log_fileops.info("Remote Path> " + target_file)
-
-        # shutil.copy2 for files, shutil.copytree for Dirs.
-        # Upload use shutil.copy2 - preserve metadata.
-        if os.path.isfile(target_file):
-            self.log_fileops.info("Type is FILE")
-            # NOTE LEGACY/shutil.copy2(target_file, full_remote_path)
-
-            # *** TRACKING PROGRESS OF COPY ***
-            def update_progress_val(bytescopied):
-                ''' Creates upload dictionary object
-                '''
-                update_dict = {
-                    'mode': 'upload',
-                    'curbytes': bytescopied,
-                    'totalbytes': size_mb,
-                    'srcpath': os.path.abspath(target_file),
-                    'sr': key_val
-                }
-                # Updating with Gui w/ update dictionary
-                self.Gui.fb_progress_val.value = update_dict 
-        
-            # Open files in binary mode.
-            source_path = os.path.abspath(target_file)
-            dest_path = os.path.abspath(full_remote_path)
-            fsrc = open(source_path, mode='rb') # read/binary mode
-            fdst = open(dest_path, mode='wb')   # write/binary mode
-
-            # *** COPYING HERE ***
-            self.copyfileobj(fsrc, fdst, update_progress_val)
-
-        # TODO - HOW DO YOU WANT TO TRACK DIR Upload PROG?
-        elif os.path.isdir(target_file):
-            self.log_fileops.info("Type is DIR")
-            # *** OR HERE IF DIR ***
-            shutil.copytree(target_file, full_remote_path)
-        
-        # Clean-up/Last Words.
-        self.log_fileops.info(file_name + " Uploaded Successfully!")
-        self.log_fileops.info("Exiting 'FileOpsQueue.start_upload'")
-
-    def add_automation(self, key_val, iid, target_automation):
-        '''
-        Converts 'input' to a thread object, and then puts it into the 
-        'worker_thread' Daemon via self.q.put(X)
-        '''
-
-        def unpack_automation(key_val, iid, target_automation):
-            '''
-            If target_automation type is "unpack", this method is called.
-
-            This checks the existence of previously unpacked files based on 
-            the IID (Explicit path) provided from the file browser - and
-            determine if the automation needs to be ran, or if the work is
-            already complete.
-            '''
-            # Defining Vars based on key_val.
-            file_name = os.path.basename(iid)
-            remote_path = query_sr(key_val, 'remote_path')
-            local_path = query_sr(key_val, 'local_path')
-            full_remote_path = remote_path + "\\" + os.path.splitext(file_name)[0]
-            full_local_path = local_path + "\\" + file_name
-
-            # First, test Remote Result folder for existence
-            if os.access(full_remote_path, os.R_OK):
-                self.log_fileops.info(key_val + "/" + file_name + " has already been unpacked! Exiting...")
-                # TODO HOW TO HANDLE ALREADY UNPACKED - TAKE USER TO FILE?")
-                return
-            
-            # Second, test Local folder for existence
-            if os.access(local_path, os.R_OK):
-                self.log_fileops.info("Local Dir for " + str(key_val) + " exist!")
-            else:
-                self.log_fileops.info("Local Dir for " + str(key_val) + " missing. Creating it...")
-                os.mkdir(local_path)
-                self.log_fileops.info("Local Dir for " + str(key_val) + " created successfully!")
-
-            # Third, Test for file existence in local folder
-            self.log_fileops.info("Checking if file already downloaded...")
-            unpacked_path = os.path.splitext(full_local_path)[0]
-            if os.access(unpacked_path, os.R_OK):
-                self.log_fileops.info(file_name + " has already been UNPACKED.")
-                self.log_fileops.info("Exiting 'start_automation'")
-                return
-            elif os.access(full_local_path, os.R_OK):
-                self.log_fileops.info(file_name + " has already been DOWNLOADED.")
-            else:
-                downloadFirst = query_automation(target_automation, 'downloadFirst')
-                if downloadFirst == '1':
-                    print("Starting download. TARGET:", full_remote_path)
-                    self.add_download(key_val, iid)
-    
-            # Finally, start the automation
-                thread_obj = threading.Thread(target=self.start_automation, 
-                    args=(key_val, iid, target_automation),
-                    name=(key_val 
-                        + "::" 
-                        + target_automation
-                        + "::" 
-                        + os.path.basename(iid)))
-                self.q.put(thread_obj)
-                # Increment Queue Size
-                self.queue_size += 1
-                self.Gui.fb_queue_string.value = str(self.queue_size) + " : Queue"            
-
-
-        def custom_automation(key_val, iid, target_automation):
-            '''
-            If the automation type is "custom", this method is called.
-
-            Different from "unpack" types, these automations are not placed
-            into the FileOps queue, but are called in individual child threads
-            to complete the defined task. Use case for this type would be
-            automations that do not need to download or extract the contents 
-            of a target file - such as sending a file to a rep-lab.
-            '''
-            print("Would launch custom_auto w/ : ",  key_val, iid, target_automation)
-
-        # Determine Automation 'type' by querying DB
-        auto_type = query_automation(target_automation, 'type')
-      
-        # If type is "unpack" - send to unpack method.
-        if auto_type == "unpack":
-            unpack_automation(key_val, iid, target_automation)
-        elif auto_type == "custom":
-            custom_automation(key_val, iid, target_automation)
-
-    def start_automation(self, key_val, iid, target_automation):
-        '''
-        Threaded process that is called when a user selects "Unpack"
-        for a supported file type. 
-        '''
-        self.log_fileops.info("Launching 'FileOpsQueue.start_automation'")
-        
-        # Update Progressbar String
-        update_dict = {
-            'mode': 'automation',
-            'srcpath': os.path.abspath(iid),
-            'sr': key_val
-        }
-        # Updating Gui w/ update dictionary
-        self.Gui.fb_progress_val.value = update_dict
-
-        # Defining Vars
-        file_name = os.path.basename(iid)
-        local_path = query_sr(key_val, 'local_path')
-        file_local_path = local_path + "\\" + file_name
-        automation_path = query_automation(target_automation, 'py_path')
-        binary_exe_list = query_automation(target_automation, 'exe_paths')
-        print("$b_exeList", bin)
-        # Converting 'binary_exe_list' to Python list obj
-        automation_exe_list = pickle.loads(binary_exe_list)
-
-        # Importing the target automation Module
-        self.log_fileops.info("Importing " + target_automation)
-        spec = importlib.util.spec_from_file_location(
-            (target_automation), automation_path)
-        automation_py = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(automation_py)
-
-        # Starting the automation.run() main method.
-        self.log_fileops.info("Start your engines " + target_automation + "!")
-        automation_py.run(iid, file_local_path, automation_exe_list)
-
-    def put(self, obj):
-        '''
-        Simple method to put *obj* into self.q
-        '''
-        #print("DEBUG/put: Caught", obj)
-        self.q.put(obj)
-
-    ## ADDING FROM STACK
-    # https://stackoverflow.com/questions/29967487/get-progress-back-from-shutil-file-copy-thread
-    def copyfileobj(self, fsrc, fdst, callback, length=0):
-        try:
-            # check for optimisation opportunity
-            if "b" in fsrc.mode and "b" in fdst.mode and fsrc.readinto:
-                return self._copyfileobj_readinto(fsrc, fdst, callback, length)
-        except AttributeError:
-            # one or both file objects do not support a .mode or .readinto attribute
-            pass
-
-        if not length:
-            length = shutil.COPY_BUFSIZE
-
-        fsrc_read = fsrc.read
-        fdst_write = fdst.write
-
-        copied = 0
-        while True:
-            buf = fsrc_read(length)
-            if not buf:
-                break
-            fdst_write(buf)
-            copied += len(buf)
-            callback(copied)
-
-    def _copyfileobj_readinto(self, fsrc, fdst, callback, length=0):
-        """readinto()/memoryview() based variant of copyfileobj().
-        *fsrc* must support readinto() method and both files must be
-        open in binary mode.
-        """
-        # differs from shutil.COPY_BUFSIZE on platforms != Windows
-        READINTO_BUFSIZE = 1024 * 1024
-
-        fsrc_readinto = fsrc.readinto
-        fdst_write = fdst.write
-
-        if not length:
-            try:
-                file_size = os.stat(fsrc.fileno()).st_size
-            except OSError:
-                file_size = READINTO_BUFSIZE
-            length = min(file_size, READINTO_BUFSIZE)
-
-        copied = 0
-        with memoryview(bytearray(length)) as mv:
-            while True:
-                n = fsrc_readinto(mv)
-                if not n:
-                    break
-                elif n < length:
-                    with mv[:n] as smv:
-                        fdst.write(smv)
-                else:
-                    fdst_write(mv)
-                copied += n
-                callback(copied)
+def remove_fav_file(file_path):
+    '''
+    Removes row containing file name, and root path from the "favorite_files"
+    table.
+    '''
+    fname = os.path.basename(file_path)
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("DELETE FROM bcamp_favfiles WHERE file_name = (?);", (fname,))
+    dbcon.commit() # save changes
+    dbcon.close()
 
 
 '''
@@ -1659,26 +2200,19 @@ class Automations:
 
     def gen_automations_db(self):
         '''
-        Using the dictionary from ".get()", this method coverts this python
-        object to the applicable columns in the "automations" table. 
-
-        [Columns]
-            name TEXT UNIQUE,
-            enabled TEXT NOT NULL,
-            version TEXT NOT NULL,
-            py_path TEXT NOT NULL,
-            py_md5 TEXT NOT NULL,
-            downloadFirst TEXT NOT NULL,
-            author TEXT,
-            description TEXT,
-            extensions TEXT,
-            exe_paths TEXT,
-            type TEXT
-
         '''
+        # To prevent DB drift from reality, ALL prev. records are removed 
+        # first before rebuilding Columns in the 'bcamp_automations' table.
+        # Before we delete the records, store any enabled automations to be
+        # re-enabled following scan.
+        prev_enabled_autos, prev_disabled_autos = get_automations()
+        print("$.prev", prev_enabled_autos)
+
+
         # Open connection to DB
         dbshell, dbcon = open_dbshell()
-
+        dbshell.execute('''DELETE FROM bcamp_automations;''')
+        print("SQLite3: 'bcamp_automations' Purged for Refresh.")
         # Iterate through list of Automation Details stored in dict...
         avail_automations = self.scan_automations()
         for auto in avail_automations:
@@ -1712,9 +2246,18 @@ class Automations:
                     ))
             except sqlite3.IntegrityError:
                 pass # Thrown for unique constraint failues/Dupes
-
         dbcon.commit() # Save changes
         dbcon.close() # Close connection
+
+        # Now, get automations once more and enable items that still exist in
+        # the extensions folder.
+        new_enabled_autos, new_disabled_autos = get_automations()
+        print("$.new(dis/en)", new_disabled_autos, new_enabled_autos)
+        for item in new_disabled_autos:
+            if item in prev_enabled_autos:
+                update_automation(item, 'enabled', 'True')
+
+        print("SQLite3: 'bcamp_automations' Populated with Avail Automations.")
 
     def get_avail(self):
         '''
@@ -1792,17 +2335,11 @@ def update_automation(target_auto, column, value):
     dbcon.close()
     print("SQLite3: *bcamp_automations*:",target_auto, column, "=", value)
 
-def toggle_automation(target_auto):
-    '''
-    Enables or Disables the Automation based on the intial value of 'enabled'
-    '''
-    pass
-
 
 '''
 [SimpleParser Engine]
 
-The below class provides further scalabilit/y of bCamp by leveraging 
+The below class provides further scalability of bCamp by leveraging 
 "user-defined parsing rules". The goal of this parser is to provide a simple
 configuration of keyword, line, or regex rules for a target file. Automating
 some of the effort for common data such as versioning.
@@ -1833,7 +2370,7 @@ class SimpleParser():
             > line : Line number to extract (starts at 0)
             > keyword : Keyword phrase to extract from file
     '''
-    def __init__(self, updated_file_record, key_val, init_Filebrowser):
+    def __init__(self, key_val, init_Filebrowser):
         print("SimpleParser: Starting seperate thread...")
         self.key_val = key_val
         self.filebrowser = init_Filebrowser
@@ -1841,31 +2378,23 @@ class SimpleParser():
 
         # STARTING THREAD!
         try:
-            threading.Thread(target=self.master_thread, 
-                args=(updated_file_record,), name=thread_name).start()
+            threading.Thread(
+                target=self.master_thread, name=thread_name
+            ).start()
         except:
             print("SimpleParser: FATAL - Unable to start thread.")
             # Exit Parser. 
             return
 
-    def master_thread(self, updated_file_record):
+    def master_thread(self):
         '''
         Core "runner" of the SimpleParser engine, that creates its own 
         seperate thread to prevent UI hanging.
         '''
-
-        # DEBUG VAR ZONE
-        print("\n\n*** updated_file_record ***")
-        pprint.pprint(updated_file_record)
-        print("\n\n*** db_file_record ***")
-        pprint.pprint(query_all_files_formatted(self.key_val))
-        print("\n**** **** **** ****\n")
-
-
-
-
-
-        allfiles = updated_file_record
+        allfiles = query_all_files_column(self.key_val, 'path')
+        print("\n\n")
+        print("$.allfiles", allfiles)
+        print("\n\n")
         ruleset = dump_parser() # Python Dict of rules saved DB.
 
         target_file_lst = [] # Simplified list of target files to search for.
@@ -2052,10 +2581,10 @@ class SimpleParser():
         within the 'downloads/*key_value*' folder for the scanned SR.
         '''
         # Generating 'bCampParser.results' file.
-        print("\n\n\n")
-        print("$line_dict", line_dict)
-        print("$keyword_dict", keyword_dict)
-        print("$regex_dict", regex_dict)
+        #print("\n\n\n")
+        #print("$line_dict", line_dict)
+        #print("$keyword_dict", keyword_dict)
+        #print("$regex_dict", regex_dict)
         
         global BCAMP_ROOTPATH
         result_file_path = (BCAMP_ROOTPATH 
@@ -2081,21 +2610,21 @@ class SimpleParser():
         results_file.write("[Line Parser Results]" + "\n")
         results_file.write("\n")
         for rule in line_dict:
-            results_file.write("ID: " + rule['id'] + "\n")
-            results_file.write("Rule(Line Number) :" + rule['rule'] + "\n")
-            results_file.write("Target: " + rule['target'] + "\n")
-            results_file.write("Result:\n\t" + rule['result'] + "\n")
+            results_file.write("ID : " + rule['id'] + "\n")
+            results_file.write("Rule(Line Number) : " + rule['rule'] + "\n")
+            results_file.write("Target : " + rule['target'] + "\n")
+            results_file.write("Result :\n\t" + rule['result'] + "\n")
             results_file.write("\n")
 
         # ** KEYWORD RESULTS
         results_file.write("[Keyword Parser Results]" + "\n")
         results_file.write("\n")
         for rule in keyword_dict:
-            results_file.write("ID: " + rule['id'] + "\n")
-            results_file.write("Target: " + rule['target'] + "\n")
-            results_file.write("Rule(Keyword): " + rule['rule'] + "\n")
+            results_file.write("ID : " + rule['id'] + "\n")
+            results_file.write("Target : " + rule['target'] + "\n")
+            results_file.write("Rule(Keyword) : " + rule['rule'] + "\n")
             #Iterating through results list.
-            results_file.write("Result:\n\t")
+            results_file.write("Result :\n\t")
             for output in rule['result']:
                 results_file.write("line:" + str(output[0]) + "  " + output[1])
                 results_file.write("\n\t")
@@ -2105,11 +2634,11 @@ class SimpleParser():
         results_file.write("[Regex Parser Results]" + "\n")
         results_file.write("\n")
         for rule in regex_dict:
-            results_file.write("ID: " + rule['id'] + "\n")
-            results_file.write("Target: " + rule['target'] + "\n")
-            results_file.write("Rule(Regex): " + rule['rule'] + "\n")
+            results_file.write("ID : " + rule['id'] + "\n")
+            results_file.write("Target : " + rule['target'] + "\n")
+            results_file.write("Rule(Regex) : " + rule['rule'] + "\n")
             #Iterating through results list.
-            results_file.write("Result:\n\t")
+            results_file.write("Result :\n\t")
             for output in rule['result']:
                 results_file.write("line:" + str(output[0]) + "  " + output[1])
                 results_file.write("\n\t")
@@ -2251,6 +2780,7 @@ def get_max_prule():
 These methods define the format for the 'allnotes_X' and 'casenotes_X' text
 files generated when a user wants to export their notes from the UI.
 '''
+
 def gen_casenotes(key_val, outfile):
     '''
     Defines the format of the CaseNotes within the output file.
@@ -2398,6 +2928,69 @@ def from_win_clipboard_str():
 
 Shortcuts to make life easy, and save some sanity!
 '''
+
+class callbackVar:
+    '''
+    Registers Var as a callback method. Used for 'events' throughout the UI.
+    When the assigned variable is changed, a callback command can be called.
+    '''
+
+    def __init__(self, initial_value=""):
+        self._value = initial_value
+        self._callbacks = []
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, new_value):
+        self._value = new_value
+        self._notify_observers(new_value)
+
+    def _notify_observers(self, new_value):
+        for callback in self._callbacks:
+            callback(new_value)
+
+    def register_callback(self, callback):
+        self._callbacks.append(callback)
+
+def smart_grid(parent, *args, **kwargs): # *args are the widgets!
+    '''
+    UI method that allows child widgets to be moved to the next row if they no
+    longer fit due to resizing.
+
+    - Parent : A frame widget that will contain the child widgets
+    - *args : This should be a list of widgets to be drawn in the frame.
+    - *kwargs : Only defines sticky location of widgets.
+    '''
+    divisions   = kwargs.pop('divisions', 100)
+    force_f     = kwargs.pop('force', True)
+    if 'sticky' not in kwargs:
+        kwargs.update(sticky='w')
+    try:
+        parent.win_width
+    except:
+        parent.win_width = -1
+    winfo_width = parent.winfo_width()
+
+    if 1 < winfo_width != parent.win_width or force_f:
+        parent.win_width = winfo_width
+        row = col = width = 0
+        argc = len(args)
+        for i in range(argc):
+            widget_width = (args[i].winfo_width() + 10)
+            columns = max(1, int(widget_width * float(divisions) / winfo_width))
+            width += widget_width
+            if width > winfo_width:
+                width = widget_width
+                row += 1
+                col = 0
+            args[i].grid(row=row, column=col, columnspan=columns, **kwargs)
+            col += columns
+        parent.update_idletasks() # update() # 
+        return row + 1
+                
 def bulk_importer(import_item):
     '''
     Method used to import multiple
@@ -2606,6 +3199,7 @@ def scrub_fpath(file_path, key_val):
     # remote/local dir.
     r_root = query_sr(key_val, 'remote_path')
     l_root = query_sr(key_val, 'local_path')
+    print("$.scrub", file_path)
 
     if r_root in file_path:
         clean_path = (file_path.replace(r_root, "").split("\\", 1)[1])
@@ -2656,13 +3250,13 @@ def set_devMode(enable_bool):
     '''
     If a user enabled Dev mode through the secret-sauce in the UI, this method
     is called to update the DB with the right parameters, and generates the
-    local '_testing_nas' remote dir
+    local '_testing_nas' remote dir.
     '''
     if enable_bool == False:
         #Updating DB config var for 'dev_mode' and 'remote_root'
-        prod_nas = r'\\dnvcorpvf2.corp.nai.org\nfs_dnvspr'
+        global BCAMP_PRODNAS
         update_config('dev_mode', "False")
-        update_config('remote_root', prod_nas)
+        update_config('remote_root', BCAMP_PRODNAS)
         print("devMode> DISABLED! Setting remote server to production.")
 
     elif enable_bool == True:
