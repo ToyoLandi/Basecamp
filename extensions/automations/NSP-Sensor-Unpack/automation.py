@@ -6,19 +6,24 @@
 Welcome to the 'example' unpacker. This is designed to be a sample "unpacker"
 to give you an idea of how these should be organized/written.
 '''
+# **REQUIRED IMPORTS
 import os
+import json
+from optparse import OptionParser
+
+# Custom Imports
 import subprocess
 
-def run(target_file_path, local_path_of_target, exe_lst):
+def __bcamp_main__(target_file_path, local_path_of_target, user_options):
     # Debug Logging
     print("***", "\n",
         "target_file_path:", target_file_path, "\n",
         "local_path_of_target:", local_path_of_target, "\n",
-        "exe_lst:", exe_lst, "\n",
+        "user_options:", user_options, "\n",
         "***")
 
-    # Saving *only* exe stored in "exe_lst" which is Python List obj.
-    external_exe = exe_lst[0]['path']
+    # Saving *only* exe stored in "user_options" dict under 'NSP REPORT TOOL'
+    external_exe = user_options['NSP Report Tool']['val']
 
     # LETS GET TO UNPACKING
     tempEnc = os.path.basename(local_path_of_target)
@@ -51,5 +56,21 @@ def run(target_file_path, local_path_of_target, exe_lst):
     #print("Unpacked file UPLOADED to REMOTE!")
     #print("UNPACKER COMPLETED SUCCESSFULLY! HAPPY HUNTING")
 
+# **REQUIRED BOOTSTRAP FOR .PY->.EXE
+if __name__ == "__main__":
+    parser = OptionParser()
+    # Switches based on user-defined options in UI.
+    parser.add_option('-i','--input-params', dest = 'input_params',
+                      help="Parameters used by the '__bcamp_main__' method")
+    (options,args) = parser.parse_args()
+    # Getting Params from .exe optional params.
+    params = json.loads(options.input_params)
+    print(params)
+    # Passing params to '__bcamp_main__' - Method called through UI.
+    __bcamp_main__(
+        target_file_path=params['target_path'],
+        local_path_of_target=params['local_target_path'], 
+        user_options=params['options']
+    )
     
     

@@ -7,13 +7,18 @@ classes that support the UI and Backend processes for Basecamp.
 
 In the future, this may always be CLI calls to supplement automation.
 '''
+# Private Imports
+import requests
+#from requests.models import Response
 
+# Public Imports
 import os
 import re
 import stat
 import json
 import time
 import queue
+import ctypes
 import shutil
 import pickle
 import pprint
@@ -22,7 +27,6 @@ import logging
 import sqlite3
 import pathlib
 import datetime
-import ctypes
 import importlib
 import threading
 import webbrowser
@@ -30,14 +34,11 @@ import py_compile
 import subprocess
 import tkinter as tk
 from tkinter import filedialog
-
-
-
 '''
 [ GLOBAL API  CONSTANTS ]
 '''
 # GLOBAL BCAMP VERSION STRING
-BCAMP_VERSION = "DEV-Sep22"
+BCAMP_VERSION = "DEV-Oct25"
 # ROOT PATH CONSTANT FOR INSTALL DIR.
 BCAMP_ROOTPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
 # PROD. NAS PATH CONSTANT
@@ -78,8 +79,10 @@ def gen_bcamp_config():
     # First, define values to be stored.
     global BCAMP_VERSION
     global BCAMP_PRODNAS
+    global BCAMP_ROOTPATH
+
     version = BCAMP_VERSION
-    root_path = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
+    root_path = BCAMP_ROOTPATH
     remote_root = BCAMP_PRODNAS
     download_root = root_path + r'\downloads'
     time_zone = str(time.tzname[0] + ":" + time.tzname[1])
@@ -90,10 +93,10 @@ def gen_bcamp_config():
     ui_render_top_menu = "True"
     ui_caseviewer_location = "left"
     ui_render_caseviewer = "True"
-    ui_caseviewer_search_location = "top"
+    ui_caseviewer_search_location = "bottom"
     ui_render_caseviewer_search = "True"
     ui_render_favtree = "True"
-    user_texteditor = "logviewer"
+    user_texteditor = "Logviewer"
 
     # Second, Execute the actual SQLite3 query.
     dbshell, dbcon = open_dbshell()
@@ -158,298 +161,13 @@ def update_config(column, value):
     dbcon.close()
     print("SQLite3: *bcamp_config*:", column, "=", value)
 
-
 # ["case"] Table Queries
-def new_import(new_import_dict, FileOpsQ):
-    '''
-    Creates a new row in the 'basecamp.cases' table, and generates the filesX
-    table if the imported SR has uploads and/or local files. This is only 
-    populated with the files from the "root" directories, to optimize import
-    time. The nested dirs, and files will be scanned and added shortly in the
-    Workspace methods.
-    '''
-    def finalize_import_data(import_dict):
-        '''
-        Returns a COMPLETE Dictionary table that is used to create a new row
-        in the 'basecamp.cases' table. This method is written in a very 
-        "expanded" way so it can scale if these vars need to be adjusted
-        before import.
-        '''
-        def set_favorite():
-            '''
-            Based on the checkbox value of "Favorite" in the Import UI window.
-
-            Sets the Casedata 'favorite' value to True or False.
-            '''
-            return import_dict['pinned']
-
-        def set_tags():
-            '''
-            Using the tags defined in the "import" window, these strings are
-            seperated by ',' and then stored as a list under...
-            
-            {<'SR_Number'>: {'tags': [<'here'>, <'and_here'>],}}
-            '''
-            tag_rstring = import_dict['tags_list']
-            if tag_rstring == None:
-                print("CaseData: No 'tags' Defined on import...")
-            else:
-                return tag_rstring
-
-        def set_account():
-            '''
-            Using the 'account' defined in the "import" window, this string
-            is stored under...
-            
-            {<'SR_Number'>: {'account': <'here'>,}}
-            '''
-            return import_dict['account']
-
-        def set_time():
-            '''
-            Utilizing the 'datetime' library, the machine local time is captured, 
-            converted to a readable format (Day, Month, 2-digit Year - TI:ME) and
-            stored under...
-
-            {<'SR_Number'>: {'last_ran_time': <'here'>,}}
-            '''
-            time = str(datetime.datetime.now())
-            return time
-
-        def set_paths():
-            '''
-            Returns the 'remote_path', and 'local_path'** of an SR number as a
-            tuple (remote, local)
-            '''
-            # Getting values from config table in DB
-            sr_num = import_dict['sr_number']
-            remote_root = get_config('remote_root')
-            local_root = get_config('download_root')
-            # Generating SR's remote/local paths from cofing roots.
-            remote_path = os.path.abspath((remote_root + "\\" + sr_num))
-            local_path = os.path.abspath((local_root + "\\" + sr_num))
-            # FUTURE - Custom Paths defined here.
-            return remote_path, local_path
-
-        def set_files_snapshot():
-            '''
-            Returns a dictionary that contains local, and remote file stat entries
-            such as 'path' or 'creation_time'
-
-            [Schema]
-            'path': path,
-            'type': _type,
-            'size': file_stats.st_size,
-            'creation_time': file_stats.st_ctime,
-            'modified_time': file_stats.st_mtime,
-            'date_range': None, # Set in "finalize" in UI    
-            'location': None,   # Set in "finalize" in UI
-            'favorite': False,  # Set in "finalize" in UI
-            'notes': None,      # Set in "finalize" in UI
-            '''
-            remote_path, local_path = set_paths()
-            # Getting Remote CaseData
-            if os.access(remote_path, os.R_OK): #If file is read-able
-                remote_file_table = get_snapshot(remote_path)
-            else:
-                remote_file_table = None
-                
-            
-            # Getting Local CaseData
-            if os.access(local_path, os.R_OK): #If file is read-able
-                local_file_table = get_snapshot(local_path)
-            else:
-                local_file_table = None
-        
-            # Getting 'customs' CaseData
-            customs_list = import_dict['customs_list']
-            customs_dict = None
-            if customs_list != None:
-                for path in customs_list:
-                    try:
-                        customs_dict = get_snapshot(path)
-                    except TypeError:
-                        customs_dict = None
-                    
-            #Building 'files' Dict entry
-            files_dict = {
-                'remote': remote_file_table,
-                'local': local_file_table,
-                'customs': customs_dict
-            }
-            return files_dict
-
-        def set_workspace():
-            '''
-            Returns the default workspace, if not set
-            manually during import.
-            '''
-            return import_dict['workspace']
-
-        def set_product():
-            '''
-            Returns the abbreviated product name (MWG, ePO, etc.) which is
-            determined by the contents of the root Remote path, if not set
-            manually during import.
-            '''
-            return import_dict['product']
-
-        def set_bug():
-            '''
-            Unless specified, new imports have a default value of 'None'.
-
-            A "TSNS" value can be set manually during import. If defined, we can 
-            query JIRA later (when we update the 'files' dict for example) to 
-            populate the remaining missing bug details
-            '''
-            return import_dict['bug_id']
-
-        def set_notes():
-            '''
-            TO-DO DESCRIPTION
-            '''
-            return import_dict['notes']
-
-        # 'new_import' RUN
-        remote_path, local_path = set_paths()
-
-        case_data = {
-            "sr_number": import_dict['sr_number'],
-            "notes": set_notes(),
-            "bug_id": set_bug(),
-            "pinned": set_favorite(),
-            "account": set_account(),
-            "product": set_product(),
-            "workspace": set_workspace(),
-            "remote_path": remote_path,
-            "local_path": local_path,
-            "last_ran_time": set_time(),
-            "import_time": set_time(),
-            # These vars will goto their own independent tables.
-            "tags": set_tags(), #[List] of tags
-            "files": set_files_snapshot() #{dict} of 'remote','local' file{}
-            }
-        
-        return case_data
-
-    # Complete case record from UI's partial 'new_import_dict'
-    case = finalize_import_data(new_import_dict)
-    # Open sqlite3 cursor
-    dbshell, dbcon = open_dbshell()
-    # Add 'case' values to 'cases' table in 'basecamp.db'
-    dbshell.execute("""INSERT INTO cases (
-        sr_number, 
-        pinned, 
-        product, 
-        account, 
-        bug_id,
-        workspace, 
-        notes,
-        remote_path,
-        local_path,
-        import_time,
-        last_ran_time)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?);""",
-        (case['sr_number'], 
-        case['pinned'],
-        case['product'],
-        case['account'],
-        case['bug_id'],
-        case['workspace'],
-        case['notes'],
-        case['remote_path'],
-        case['local_path'],
-        case['import_time'],
-        case['last_ran_time']))
-
-    # Generate New imports FilesX Table.
-    table_id, files_table_query = create_files_table(case['sr_number'])
-    dbshell.execute(files_table_query)
-    # Update case record with files_table string.
-    dbshell.execute("UPDATE cases SET files_table = (?) WHERE sr_number = (?)",
-        (table_id, case['sr_number']))
- 
-    # Then populate it with results from set_files_snapshot here.
-    # Remote files...
-    if case['files']['remote'] != None:
-        for file in case['files']['remote']:
-            dbshell.execute("INSERT INTO " +  table_id + """(
-                    name,
-                    location,
-                    path,
-                    type,
-                    size,
-                    creation_time,
-                    modified_time,
-                    date_range,
-                    favorite,
-                    notes,
-                    depth_index)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?);""",
-                (file,
-                "remote",
-                case['files']['remote'][file]['path'],
-                case['files']['remote'][file]['type'],
-                case['files']['remote'][file]['size'],
-                case['files']['remote'][file]['creation_time'],
-                case['files']['remote'][file]['modified_time'],
-                case['files']['remote'][file]['date_range'],
-                case['files']['remote'][file]['favorite'],
-                case['files']['remote'][file]['notes'],
-                case['files']['remote'][file]['depth_index']))
-
-    # And Local files...
-    if case['files']['local'] != None:
-        for file in case['files']['local']:
-            dbshell.execute("INSERT INTO " +  table_id + """(
-                    name,
-                    location,
-                    path,
-                    type,
-                    size,
-                    creation_time,
-                    modified_time,
-                    date_range,
-                    favorite,
-                    notes,
-                    depth_index)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?);""",
-                (file,
-                "remote",
-                case['files']['local'][file]['path'],
-                case['files']['local'][file]['type'],
-                case['files']['local'][file]['size'],
-                case['files']['local'][file]['creation_time'],
-                case['files']['local'][file]['modified_time'],
-                case['files']['local'][file]['date_range'],
-                case['files']['local'][file]['favorite'],
-                case['files']['local'][file]['notes'],
-                case['files']['local'][file]['depth_index']))
-    # If tags were added, append them to "tags" table
-    if case['tags'] != None:
-        for tag in case['tags']:
-            # insert into tags table w/ sr appended (case['sr_number'])
-            dbshell.execute("""INSERT INTO tags (tag, sr_number)
-                VALUES (?, ?);""", (tag, case['sr_number']))
-
-    # Finally, close connection
-    dbcon.commit()
-    dbcon.close()
-
-    # Last, check if user defined download during import, and take action.
-    if new_import_dict['download_flag'] == 0:
-        pass # DO nothing.
-    elif new_import_dict['download_flag'] == 1:
-        # Send paths stored in DB to the FileOpsQueue.
-        #print("$.API>", query_all_files_column(case['sr_number'], 'path'))
-        for path in query_all_files_column(case['sr_number'], 'path'):
-            FileOpsQ.add_download(case['sr_number'], path)
 
 def drop_sr(key_val):
     '''
     Drops all related tables and rows for 'key_val'
     '''
-    files_table = query_sr(key_val, 'files_table')
+    files_table = query_case(key_val, 'files_table')
     dbshell, dbcon = open_dbshell()
     # Delete filesX table
     if files_table != None:
@@ -461,7 +179,7 @@ def drop_sr(key_val):
     dbcon.commit() # save changes
     dbcon.close() # close connection to DB.
 
-def query_sr(key_val, column):
+def query_case(key_val, column):
     '''
     Returns the value of 'column' from the 'key_val' row in the cases table.
     '''
@@ -471,17 +189,6 @@ def query_sr(key_val, column):
     result = dbshell.fetchone()
     dbcon.close()
     return result[0] # Results are tuples, but we expect ONLY 1 value here.
-
-def query_all_sr(key_val):
-    '''
-    Returns the value of all columns from 'key_val' row in the cases table.
-    '''
-    dbshell, dbcon = open_dbshell()
-    dbshell.execute("SELECT * FROM cases WHERE sr_number = (?);", 
-        (key_val,))
-    result = dbshell.fetchall()
-    dbcon.close()
-    return result[0] # Results is a tuple in order of SQL column index
 
 def query_cases(column):
     '''
@@ -493,6 +200,17 @@ def query_cases(column):
     dbcon.close()
 
     return result # Results are tuples.
+
+def query_all_sr(key_val):
+    '''
+    Returns the value of all columns from 'key_val' row in the cases table.
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT * FROM cases WHERE sr_number = (?);", 
+        (key_val,))
+    result = dbshell.fetchall()
+    dbcon.close()
+    return result[0] # Results is a tuple in order of SQL column index
 
 def query_cases_distinct(column):
     '''
@@ -525,7 +243,27 @@ def query_case_exist(key_val):
     else:
         return False
 
-def update_sr(key_val, column, value):
+def query_bugs():
+    '''
+    Returns a list of sets containing (SR Num, JIRA-ID/None)
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT sr_number, bug_id FROM cases;")
+    result = dbshell.fetchall()
+    dbcon.close()
+    return result # Results are tuples.
+
+def query_cases_simple_export():
+    '''
+    Returns a list of sets containing (SR Num, Account, Product) sets
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT sr_number, product, account, pinned FROM cases;")
+    result = dbshell.fetchall()
+    dbcon.close()
+    return result # Results are tuples.
+
+def update_case(key_val, column, value):
     '''
     Updates a single column value for a key_value in the cases table.
     '''
@@ -627,6 +365,48 @@ def parse_filter_search(raw_query, cur_filterset):
     cur_filterset['custom'] = cur_filterset['custom'] + query_list
 
     return cur_filterset
+
+## [ Casetiles Query ]
+def dbget_case_casetiles():
+    '''
+    Returns a list containing SR sets with parameters for various sorting
+    methods.
+
+    [
+        ['sr_number', props:{
+            'sr_number ': str
+            'pinned ': int
+            'account ': str
+            'product ': str
+            'bug_id ': str
+            'jira_status': str  
+            'notify_flag': int 
+            }
+        ]
+    ]
+    '''
+
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute('''SELECT sr_number, pinned, account, product, bug_id, 
+        jira_status, jira_notify_flag, file_notify_flag FROM cases;''')
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Format results from [(data)] to Dict format.
+    return_var = []
+    for item in result:
+        '''
+        'pinned': item[1],
+        'account': item[2],
+        'product': item[3],
+        'bug_id': item[4],
+        'jira_status': item[5],  
+        'jira_notify_flag': item[6],
+        'file_notify_flag': item[7]
+        '''           
+        item_lst = [item[0], item[1], item[2], item[3], item[4], item[5], 
+            item[6], item[7]]
+        return_var.append(item_lst)
+    return return_var
 
 ## [ Search Engine found in CaseViewer ]
 def search_cases(f_set):
@@ -731,6 +511,19 @@ def search_cases(f_set):
             for item in raw_result:
                 f_res.append(item[0])
             return f_res
+
+        def jira_search(target):
+            dbshell, dbcon = open_dbshell()
+            dbshell.execute("SELECT sr_number FROM cases WHERE bug_id LIKE ?;",
+                ('%'+target+'%',))
+            raw_result = dbshell.fetchall()
+            dbcon.close()
+            # format results.
+            f_res = []
+            for item in raw_result:
+                f_res.append(item[0])
+            return f_res
+    
         # [ /SPECIAL SEARCH METHODS ONLY FOR CUSTOM STRINGS ]        
 
         # DRIVER CODE FOR 'custom_search'
@@ -740,6 +533,7 @@ def search_cases(f_set):
         product_return = c_product_search(target)
         tag_return = c_tag_search(target)
         sr_return = sr_search(target)
+        jira_return = jira_search(target)
 
         # Then add the list together to get a aggregate list of SR's.
         aggregate_list = (
@@ -747,6 +541,7 @@ def search_cases(f_set):
             + product_return 
             + tag_return 
             + sr_return
+            + jira_return
         )
 
         print("$aggr_lst", aggregate_list)
@@ -903,11 +698,11 @@ def search_cases(f_set):
         for item in sr_set:
             custom_res.append(item)
 
-    #print("** SEARCH RESULTS **")
-    #print("account>", account_res)
-    #print("product>", product_res)
-    #print("tag>", tag_res)
-    #print("custom>", custom_res)
+    print("** SEARCH RESULTS **")
+    print("account>", account_res)
+    print("product>", product_res)
+    print("tag>", tag_res)
+    print("custom>", custom_res)
 
     # Checking results from ALL search list above, and appending SR's that are
     # present in all list. 
@@ -950,21 +745,572 @@ def query_tags(key_val):
 
 
 '''
-[Filebrowser Logic]
-
-The below methods crawl through the local and remote dirs, extracting file
-metadata (File Size, Creation time, Paths). The resulting data has two 
-purposes.
-
-1 - Being rendered within the UI (Basecamp.Tk_Filebrowser)
-2 - Stored in the SQLite3 DB for future rendering, and references.
-
-The "FileOpsQueue" class is a *Queue* daemon that manages *Threading.threads*
-utilized by the Basecamp.Tk_Filebrowser class for downloads, uploads, and
-Automations. This queue (FIFO) is global, meaning all open cases use the same
-queue. This is to optimize performance by reducing disk chaos.
+[Case Import/Backups]
 '''
+class ImportDaemon:
+    '''
+    Daemon Thread that handles single or multiple imports without hanging UI.
+    '''
+    def __init__(self, Gui):
+        # Core Vars
+        self.q = queue.Queue()
+        self.results = callbackVar()
+        self.thread_running = callbackVar()
+        self.prog_val = callbackVar()
+        self.Gui = Gui
 
+        # Starting worker_thread.
+        threading.Thread(target=self.worker_thread,
+            name='CaseImport-Daemon',
+            daemon=True).start()
+
+    def worker_thread(self):
+        '''
+        Daemon Thread for CaseImport-Daemon
+        '''
+        while True: # Infin. Loop
+            item = self.q.get()
+            item.start() # Starting 'start_poll' method.
+            # Enter nested while until 'item' thread is complete.
+            while item.is_alive():
+                time.sleep(0.5)
+            # Exit and go to next item in Queue if any.
+            self.q.task_done()
+
+    def add_import(self, import_type, case_data_lst):
+        '''
+        Adds the import thread into the Queue.
+        '''
+        print('IMPORT>> adding', len(case_data_lst), 'items')
+        # Refresh Casetiles Flag - True when importing missing SR(s) only.
+        _refresh_tiles = False
+
+        # Get Initalized CaseViewer from Gui.
+        sidebar_init_apps = self.Gui.RootPane.sidebar_pane.init_apps.value
+        for item in sidebar_init_apps:
+            if item[0] == 'Tk_CaseViewer':
+                active_caseviewer = (item[1]['pane']).init_targetwidget
+        
+        for item in case_data_lst:
+            # Check if SR exist already in DB.
+            if not query_case_exist(item['sr_number']):
+                # Update refresh_flag
+                _refresh_tiles = True
+                # Create logic thread obj, and put into Daemon queue.
+                import_thread = threading.Thread(target=self.logic, name='Import.Thread', args=(item,))
+                self.q.put(import_thread)
+        
+        # Finally add CaseViewer Tile Refresh method at end of queue.
+        if _refresh_tiles:
+            tile_refresh = threading.Thread(target=active_caseviewer.NEW_gen_all_casetiles, name='Import.RefreshThread')
+            self.q.put(tile_refresh)
+
+    def logic(self, case_data):
+        # Unpacking SR key_value from import Dict.
+        import_key_value = case_data['sr_number']
+        print("IMPORT: Caught new_value <" + import_key_value + ">")
+
+        # SR Numbers are 13 characters long.
+        if len(import_key_value) == 13:
+            # Create data for new_import and populate the DB with vals.
+            new_import(case_data, self.Gui.FileOpsQ)
+            # Create local 'downloads' folder.
+            try:
+                os.mkdir(self.RPATH + "\\downloads\\" + import_key_value)
+            except:
+                print("ERROR - Unable to create 'downloads' folder for ", import_key_value)
+
+        else:
+            pass
+        #print("WARN - SR has already been imported!")
+            #self.Workbench.render_workspace(import_key_value)
+
+
+def new_import(new_import_dict, FileOpsQ):
+    '''
+    Creates a new row in the 'basecamp.cases' table, and generates the filesX
+    table if the imported SR has uploads and/or local files. This is only 
+    populated with the files from the "root" directories, to optimize import
+    time. The nested dirs, and files will be scanned and added shortly in the
+    Workspace methods.
+    '''
+    def finalize_import_data(import_dict):
+        '''
+        Returns a COMPLETE Dictionary table that is used to create a new row
+        in the 'basecamp.cases' table. This method is written in a very 
+        "expanded" way so it can scale if these vars need to be adjusted
+        before import.
+        '''
+        def set_favorite():
+            '''
+            Based on the checkbox value of "Favorite" in the Import UI window.
+
+            Sets the Casedata 'favorite' value to True or False.
+            '''
+            if import_dict['pinned'] == None:
+                return 0
+            else:
+                return import_dict['pinned']
+
+        def set_tags():
+            '''
+            Using the tags defined in the "import" window, these strings are
+            seperated by ',' and then stored as a list under...
+            
+            {<'SR_Number'>: {'tags': [<'here'>, <'and_here'>],}}
+            '''
+            tag_rstring = import_dict['tags_list']
+            if tag_rstring == None:
+                print("CaseData: No 'tags' Defined on import...")
+            else:
+                return tag_rstring
+
+        def set_account():
+            '''
+            Using the 'account' defined in the "import" window, this string
+            is stored under...
+            
+            {<'SR_Number'>: {'account': <'here'>,}}
+            '''
+            return import_dict['account']
+
+        def set_time():
+            '''
+            Utilizing the 'datetime' library, the machine local time is captured, 
+            converted to a readable format (Day, Month, 2-digit Year - TI:ME) and
+            stored under...
+
+            {<'SR_Number'>: {'last_ran_time': <'here'>,}}
+            '''
+            time = str(datetime.datetime.now())
+            return time
+
+        def set_paths():
+            '''
+            Returns the 'remote_path', and 'local_path'** of an SR number as a
+            tuple (remote, local)
+            '''
+            # Getting values from config table in DB
+            sr_num = import_dict['sr_number']
+            remote_root = get_config('remote_root')
+            local_root = get_config('download_root')
+            # Generating SR's remote/local paths from cofing roots.
+            remote_path = os.path.abspath((remote_root + "\\" + sr_num))
+            local_path = os.path.abspath((local_root + "\\" + sr_num))
+            # FUTURE - Custom Paths defined here.
+            return remote_path, local_path
+
+        def set_files_snapshot():
+            '''
+            Returns a dictionary that contains local, and remote file stat entries
+            such as 'path' or 'creation_time'
+
+            [Schema]
+            'path': path,
+            'type': _type,
+            'size': file_stats.st_size,
+            'creation_time': file_stats.st_ctime,
+            'modified_time': file_stats.st_mtime,
+            'date_range': None, # Set in "finalize" in UI    
+            'location': None,   # Set in "finalize" in UI
+            'favorite': False,  # Set in "finalize" in UI
+            'notes': None,      # Set in "finalize" in UI
+            '''
+            remote_path, local_path = set_paths()
+            # Getting Remote CaseData
+            if os.access(remote_path, os.R_OK): #If file is read-able
+                remote_file_table = get_snapshot(remote_path)
+            else:
+                remote_file_table = None
+                
+            
+            # Getting Local CaseData
+            if os.access(local_path, os.R_OK): #If file is read-able
+                local_file_table = get_snapshot(local_path)
+            else:
+                local_file_table = None
+        
+            # Getting 'customs' CaseData
+            customs_list = import_dict['customs_list']
+            customs_dict = None
+            if customs_list != None:
+                for path in customs_list:
+                    try:
+                        customs_dict = get_snapshot(path)
+                    except TypeError:
+                        customs_dict = None
+                    
+            #Building 'files' Dict entry
+            files_dict = {
+                'remote': remote_file_table,
+                'local': local_file_table,
+                'customs': customs_dict
+            }
+            return files_dict
+
+        def set_workspace():
+            '''
+            Returns the default workspace, if not set
+            manually during import.
+            '''
+            return import_dict['workspace']
+
+        def set_product():
+            '''
+            Returns the abbreviated product name (MWG, ePO, etc.) which is
+            determined by the contents of the root Remote path, if not set
+            manually during import.
+            '''
+            return import_dict['product']
+
+        def set_bug():
+            '''
+            Unless specified, new imports have a default value of 'None'.
+
+            A "TSNS" value can be set manually during import. If defined, we can 
+            query JIRA later (when we update the 'files' dict for example) to 
+            populate the remaining missing bug details
+            '''
+            return import_dict['bug_id']
+
+        def set_notes():
+            '''
+            TO-DO DESCRIPTION
+            '''
+            return import_dict['notes']
+
+        def set_jira_status():
+            try:
+                return import_dict['jira_status']
+            except:
+                return None
+
+        def set_jira_notify():
+            try:
+                return import_dict['jira_notify_flag']
+            except:
+                return 0
+
+        # 'new_import' RUN
+        remote_path, local_path = set_paths()
+
+        case_data = {
+            "sr_number": import_dict['sr_number'],
+            "notes": set_notes(),
+            "bug_id": set_bug(),
+            "pinned": set_favorite(),
+            "account": set_account(),
+            "product": set_product(),
+            "workspace": set_workspace(),
+            "remote_path": remote_path,
+            "local_path": local_path,
+            "last_ran_time": set_time(),
+            "import_time": set_time(),
+            # These vars will goto their own independent tables.
+            "tags": set_tags(), #[List] of tags
+            "files": set_files_snapshot(), #{dict} of 'remote','local' file{},
+            "jira_status": set_jira_status(),
+            "jira_notify_flag": set_jira_notify()
+            }
+        
+        return case_data
+
+    # Complete case record from UI's partial 'new_import_dict'
+    case = finalize_import_data(new_import_dict)
+    # Open sqlite3 cursor
+    dbshell, dbcon = open_dbshell()
+    # Add 'case' values to 'cases' table in 'basecamp.db'
+    dbshell.execute("""INSERT INTO cases (
+        sr_number, 
+        pinned, 
+        product, 
+        account, 
+        bug_id,
+        workspace, 
+        notes,
+        remote_path,
+        local_path,
+        import_time,
+        last_ran_time,
+        jira_status,
+        jira_notify_flag)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);""",
+        (case['sr_number'], 
+        case['pinned'],
+        case['product'],
+        case['account'],
+        case['bug_id'],
+        case['workspace'],
+        case['notes'],
+        case['remote_path'],
+        case['local_path'],
+        case['import_time'],
+        case['last_ran_time'],
+        case['jira_status'],
+        case['jira_notify_flag']))
+
+    # Generate New imports FilesX Table.
+    table_id, files_table_query = create_files_table(case['sr_number'])
+    dbshell.execute(files_table_query)
+    # Update case record with files_table string.
+    dbshell.execute("UPDATE cases SET files_table = (?) WHERE sr_number = (?)",
+        (table_id, case['sr_number']))
+ 
+    # Then populate it with results from set_files_snapshot here.
+    # Remote files...
+    if case['files']['remote'] != None:
+        for file in case['files']['remote']:
+            dbshell.execute("INSERT INTO " +  table_id + """(
+                    name,
+                    location,
+                    path,
+                    type,
+                    size,
+                    creation_time,
+                    modified_time,
+                    date_range,
+                    favorite,
+                    notes,
+                    depth_index)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?);""",
+                (file,
+                "remote",
+                case['files']['remote'][file]['path'],
+                case['files']['remote'][file]['type'],
+                case['files']['remote'][file]['size'],
+                case['files']['remote'][file]['creation_time'],
+                case['files']['remote'][file]['modified_time'],
+                case['files']['remote'][file]['date_range'],
+                case['files']['remote'][file]['favorite'],
+                case['files']['remote'][file]['notes'],
+                case['files']['remote'][file]['depth_index']))
+
+    # And Local files...
+    if case['files']['local'] != None:
+        for file in case['files']['local']:
+            dbshell.execute("INSERT INTO " +  table_id + """(
+                    name,
+                    location,
+                    path,
+                    type,
+                    size,
+                    creation_time,
+                    modified_time,
+                    date_range,
+                    favorite,
+                    notes,
+                    depth_index)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?);""",
+                (file,
+                "remote",
+                case['files']['local'][file]['path'],
+                case['files']['local'][file]['type'],
+                case['files']['local'][file]['size'],
+                case['files']['local'][file]['creation_time'],
+                case['files']['local'][file]['modified_time'],
+                case['files']['local'][file]['date_range'],
+                case['files']['local'][file]['favorite'],
+                case['files']['local'][file]['notes'],
+                case['files']['local'][file]['depth_index']))
+    
+    # If tags were added, append them to "tags" table
+    if case['tags'] != None:
+        for tag in case['tags']:
+            # insert into tags table w/ sr appended (case['sr_number'])
+            dbshell.execute("""INSERT INTO tags (tag, sr_number)
+                VALUES (?, ?);""", (tag, case['sr_number']))
+
+    # Finally, close connection
+    dbcon.commit()
+    dbcon.close()
+
+    # Last, check if user defined download during import, and take action.
+    try:
+        if new_import_dict['download_flag'] == 0:
+            pass # DO nothing.
+        elif new_import_dict['download_flag'] == 1:
+            # Send paths stored in DB to the FileOpsQueue.
+            #print("$.API>", query_all_files_column(case['sr_number'], 'path'))
+            for path in query_all_files_column(case['sr_number'], 'path'):
+                FileOpsQ.add_download(case['sr_number'], path)
+    except KeyError: # Thrown when download_flag is missing. 
+        pass # Dont download any content.
+
+def export_cases_backup(event=None):
+    '''
+    Exports the imported case data, allowing this to be imported later.
+    '''
+    global BCAMP_ROOTPATH 
+
+    # Generating Binary output from content in DB
+    sr_list = query_cases('sr_number')
+    all_data = [] # Source for Binary export using pickle.
+
+    for sr in sr_list:
+        db_data = query_all_sr(sr[0])
+        sr_tags = query_tags(sr[0])
+        dataset = {
+            'sr_number': db_data[0],
+            'remote_path': db_data[1],
+            'local_path': db_data[2],
+            'pinned': db_data[3],
+            'product': db_data[4],
+            'account': db_data[5],
+            'notes': db_data[6],
+            'bug_id': db_data[7],
+            'tags_list': sr_tags,
+            'workspace': None,
+            'customs_list': None
+        }
+        all_data.append(dataset)
+
+
+    # Prompting user to choose export location.
+    fpath = filedialog.askdirectory(
+            initialdir=BCAMP_ROOTPATH,
+            title="Basecamp - Export Location",
+        )
+    
+    # Saving 'binary_export' to 'fpath' location
+    timestamp = datetime.datetime.now()
+    outfile_name = "BasecampCases_" + str(timestamp.strftime("%Y-%m-%d")) + ".bkp"
+    bkp_path = fpath + '\\' + outfile_name
+    outfile = open(bkp_path, 'wb')
+    pickle.dump(all_data, outfile)
+    outfile.close()
+
+def import_cases_backup(Gui, event=None):
+    '''
+    Exports the imported case data, allowing this to be imported later.
+    '''
+    # open file and convert pickle Binary to Py data.
+    target_file = filedialog.askopenfile(
+        mode='rb',
+        initialdir=BCAMP_ROOTPATH,
+        title="Basecamp - Select Cases Backup File",
+    )
+    imported_dataset = pickle.load(target_file)
+    # Define results_dict schema
+    new_import_dict = {
+        'type':'backup', 
+        'case_data':[]
+    }
+    # Iterating through backup to generate values into DB.
+    for sr_set in imported_dataset:
+        new_import_dict['case_data'].append(sr_set)
+    # Update UI Callback to start import.
+    Gui.import_item.value = new_import_dict
+
+def export_bulk_import_file(event=None):
+    '''
+    Creates a '.txt' file containing...
+
+    'SR Number', 'Product', 'Account', 'Pinned'
+
+    ...per line for bulk importing without DB schemas having to match.
+    '''
+    case_data = query_cases_simple_export()
+    print("$.simple-x", case_data)
+    
+    # Prompting user to choose export location.
+    fpath = filedialog.askdirectory(
+            initialdir=BCAMP_ROOTPATH,
+            title="Basecamp - Export Location",
+        )
+    result_fname = 'Basecamp_BulkImport.txt'
+    result_fpath = fpath + "\\" + result_fname
+    rfile = open(result_fpath, 'w+')
+    # Read lines of "ifile" and import one, by one.
+    for item in case_data:
+        _sr_num = item[0]
+        _product = item[1]
+        _account = item[2]
+        _pinned = item[3]
+        # Format string to be written into file per line.
+        raw_string = _sr_num + ', ' + str(_product) + ', ' + str(_account) + ', ' + str(_pinned) + '\n'
+        print('--->', raw_string)
+        rfile.write(raw_string)
+    rfile.close()
+
+def bulk_importer(import_item):
+    '''
+    Method used to import multiple SRs using a .txt as a source.
+    '''
+    def build_import_set(sr_num, product, account, pinned):
+        if product != None:
+            product = product.strip()
+        if account != None:
+            account.strip()
+
+        # Creating "import_item" Dictionary
+        sr_set = {
+            # Required Dict Vals
+            'sr_number': sr_num,
+            #'remote_path': None,  # Set in Finalize...
+            #'local_path': None, # Set in Finalize...
+            'pinned': pinned, # Default = !Pinned
+            # Import/Calculated Values
+            'product': product,
+            'account': account,
+            #'import_time': None,
+            #'last_ran_time': None,
+            # Untouched Dict Vals for bulk
+            'bug_id': None,
+            'workspace': None,
+            'notes': None,
+            'tags_list': None,
+            'customs_list': None,
+            'download_flag': 0 # Do not download available files on import.
+        }
+        return sr_set
+    
+    # Define results_dict schema
+    new_import_dict = {
+        'type':'bulk', 
+        'case_data':[]
+    }
+
+    # Prompt user for file to import from.
+    src_file = filedialog.askopenfilename(
+        initialdir="/",
+        title="Basecamp Bulk Importer - Select a source import file!",
+        filetypes=[("Text files",
+                    "*.txt*")])
+
+    # Open resulting file
+    print("USER SELECTED IMPORT FILE:", src_file)
+    ifile = open(src_file, 'r')
+    ifile_content = ifile.readlines()
+    # Read lines of "ifile" and generate import sets.
+    total_cnt = 0
+    for line in ifile_content:
+        print("-->", line)
+        # Splitting string to parse for account, and product vals.
+        split_line = line.split(', ')
+        # Order -> Sr_Num, Product, Account S
+        _sr_num = split_line[0]
+        _product = split_line[1]
+        _account = split_line[2]
+        _pinned = split_line[3]
+        # Format vars from str to expected dataType
+        if _product == 'None':
+            _product = None
+        if _account == 'None':
+            _account = None
+        _pinned = int(_pinned)
+        sr_set = build_import_set(_sr_num, _product, _account, _pinned)
+        new_import_dict['case_data'].append(sr_set)
+        total_cnt += 1
+
+    # Close file
+    ifile.close()
+    # Update UI Callback to start import.
+    import_item.value = new_import_dict
+
+
+'''
+[FileOps Daemon]
+'''
 class FileOpsQueue:
     '''
     Master Queue for Unpack/Download operations for ALL filebrowsers.
@@ -988,6 +1334,7 @@ class FileOpsQueue:
         self.log_fileops.info("STARTING FILEOPSQUEUE")
         while True: # Infin. Loop
             item = self.q.get()
+            print("$.fq", item)
             item.start() # Starting thread_obj
             # Enter nested while until 'item' thread is complete.
             while item.is_alive():
@@ -1188,7 +1535,6 @@ class FileOpsQueue:
         Converts 'input' to a thread object, and then puts it into the 
         'worker_thread' Daemon via self.q.put(X)
         '''
-
         def unpack_automation(key_val, iid, target_automation):
             '''
             If target_automation type is "unpack", this method is called.
@@ -1200,16 +1546,16 @@ class FileOpsQueue:
             '''
             # Defining Vars based on key_val.
             file_name = os.path.basename(iid)
-            remote_path = query_sr(key_val, 'remote_path')
-            local_path = query_sr(key_val, 'local_path')
+            remote_path = query_case(key_val, 'remote_path')
+            local_path = query_case(key_val, 'local_path')
             full_remote_path = remote_path + "\\" + os.path.splitext(file_name)[0]
             full_local_path = local_path + "\\" + file_name
 
-            # First, test Remote Result folder for existence
-            if os.access(full_remote_path, os.R_OK):
-                self.log_fileops.info(key_val + "/" + file_name + " has already been unpacked! Exiting...")
-                # TODO HOW TO HANDLE ALREADY UNPACKED - TAKE USER TO FILE?")
-                return
+            ## First, test Remote Result folder for existence
+            #if os.access(full_remote_path, os.R_OK):
+            #    self.log_fileops.info(key_val + "/" + file_name + " has already been unpacked! Exiting...")
+            #    # TODO HOW TO HANDLE ALREADY UNPACKED - TAKE USER TO FILE?")
+            #    return
             
             # Second, test Local folder for existence
             if os.access(local_path, os.R_OK):
@@ -1228,13 +1574,25 @@ class FileOpsQueue:
                 return
             elif os.access(full_local_path, os.R_OK):
                 self.log_fileops.info(file_name + " has already been DOWNLOADED.")
+                # Finally, start the automation
+                thread_obj = threading.Thread(target=self.start_automation, 
+                    args=(key_val, iid, target_automation),
+                    name=(key_val 
+                        + "::" 
+                        + target_automation
+                        + "::" 
+                        + os.path.basename(iid)))
+                self.q.put(thread_obj)
+                # Increment Queue Size
+                self.queue_size += 1
+                self.queue_callback.value = self.queue_size    
             else:
                 downloadFirst = query_automation(target_automation, 'downloadFirst')
                 if downloadFirst == '1':
                     print("Starting download. TARGET:", full_remote_path)
                     self.add_download(key_val, iid)
     
-            # Finally, start the automation
+                # Finally, start the automation
                 thread_obj = threading.Thread(target=self.start_automation, 
                     args=(key_val, iid, target_automation),
                     name=(key_val 
@@ -1258,7 +1616,60 @@ class FileOpsQueue:
             automations that do not need to download or extract the contents 
             of a target file - such as sending a file to a rep-lab.
             '''
-            print("Would launch custom_auto w/ : ",  key_val, iid, target_automation)
+                        # Defining Vars based on key_val.
+            file_name = os.path.basename(iid)
+            remote_path = query_case(key_val, 'remote_path')
+            local_path = query_case(key_val, 'local_path')
+            full_remote_path = remote_path + "\\" + os.path.splitext(file_name)[0]
+            full_local_path = local_path + "\\" + file_name
+
+            ## First, test Remote Result folder for existence
+            #if os.access(full_remote_path, os.R_OK):
+            #    self.log_fileops.info(key_val + "/" + file_name + " has already been unpacked! Exiting...")
+            #    # TODO HOW TO HANDLE ALREADY UNPACKED - TAKE USER TO FILE?")
+            #    return
+            
+            # Second, test Local folder for existence
+            if os.access(local_path, os.R_OK):
+                self.log_fileops.info("Local Dir for " + str(key_val) + " exist!")
+            else:
+                self.log_fileops.info("Local Dir for " + str(key_val) + " missing. Creating it...")
+                os.mkdir(local_path)
+                self.log_fileops.info("Local Dir for " + str(key_val) + " created successfully!")
+
+            # Third, Test for file existence in local folder
+            self.log_fileops.info("Checking if file already downloaded...")
+            if os.access(full_local_path, os.R_OK):
+                self.log_fileops.info(file_name + " has already been DOWNLOADED.")
+                # Finally, start the automation
+                thread_obj = threading.Thread(target=self.start_automation, 
+                    args=(key_val, iid, target_automation),
+                    name=(key_val 
+                        + "::" 
+                        + target_automation
+                        + "::" 
+                        + os.path.basename(iid)))
+                self.q.put(thread_obj)
+                # Increment Queue Size
+                self.queue_size += 1
+                self.queue_callback.value = self.queue_size    
+            else:
+                downloadFirst = query_automation(target_automation, 'downloadFirst')
+                if downloadFirst == '1':
+                    print("Starting download. TARGET:", full_remote_path)
+                    self.add_download(key_val, iid)
+                # Finally, start the automation
+                thread_obj = threading.Thread(target=self.start_automation, 
+                    args=(key_val, iid, target_automation),
+                    name=(key_val 
+                        + "::" 
+                        + target_automation
+                        + "::" 
+                        + os.path.basename(iid)))
+                self.q.put(thread_obj)
+                # Increment Queue Size
+                self.queue_size += 1
+                self.queue_callback.value = self.queue_size
 
         # Determine Automation 'type' by querying DB
         auto_type = query_automation(target_automation, 'type')
@@ -1268,6 +1679,62 @@ class FileOpsQueue:
             unpack_automation(key_val, iid, target_automation)
         elif auto_type == "custom":
             custom_automation(key_val, iid, target_automation)
+
+    def start_automation_exeflavor(self, key_val, iid, target_automation):
+        '''
+        Threaded process that is called when a user selects "Unpack"
+        for a supported file type. 
+        '''
+        self.log_fileops.info("Launching 'FileOpsQueue.start_automation'")
+        
+        # Update Progressbar String
+        update_dict = {
+            'mode': 'automation',
+            'srcpath': os.path.abspath(iid),
+            'sr': key_val
+        }
+        # Updating Gui w/ update dictionary
+        self.progress_obj.value = update_dict
+
+        # Defining Vars
+        file_name = os.path.basename(iid)
+        local_path = query_case(key_val, 'local_path')
+        file_local_path = local_path + "\\" + file_name
+        automation_path = query_automation(target_automation, 'exe_path')
+        binary_exe_list = query_automation(target_automation, 'user_options')
+        
+        # Converting 'binary_exe_list' to Python list obj
+        # That will be passed as a var from the 
+        automation_exe_list = pickle.loads(binary_exe_list)
+        user_defined_opts = {}
+        for item in automation_exe_list:
+            user_defined_opts[item['name']] = {
+                'type': list(item)[1],
+                'val': item[list(item)[1]]
+            }
+        
+        # Importing the target automation Module
+            ## self.log_fileops.info("Importing " + target_automation)
+            ## spec = importlib.util.spec_from_file_location(
+            ##     (target_automation), automation_path)
+            ## automation_py = importlib.util.module_from_spec(spec)
+            ## spec.loader.exec_module(automation_py)
+        print("   $.*JSON TEST")
+        input_set = {
+            'target_path': iid,
+            'local_target_path': file_local_path,
+            'options': user_defined_opts
+            }
+        input_set = json.dumps(input_set)
+        debug_path = os.path.normpath(automation_path)
+        print('dpath', debug_path)
+        print('read', os.access(debug_path, os.R_OK))
+        print('exe', os.access(debug_path, os.X_OK))
+
+        # Starting the automation.run() main method.
+        self.log_fileops.info("Start your engines " + target_automation + "!")
+            ## automation_py.__bcamp_main__(iid, file_local_path, user_defined_opts)
+        subprocess.run((debug_path, '-i', input_set))
 
     def start_automation(self, key_val, iid, target_automation):
         '''
@@ -1287,14 +1754,21 @@ class FileOpsQueue:
 
         # Defining Vars
         file_name = os.path.basename(iid)
-        local_path = query_sr(key_val, 'local_path')
+        local_path = query_case(key_val, 'local_path')
         file_local_path = local_path + "\\" + file_name
-        automation_path = query_automation(target_automation, 'py_path')
-        binary_exe_list = query_automation(target_automation, 'exe_paths')
+        automation_path = query_automation(target_automation, 'exe_path')
+        binary_exe_list = query_automation(target_automation, 'user_options')
         
         # Converting 'binary_exe_list' to Python list obj
         # That will be passed as a var from the 
         automation_exe_list = pickle.loads(binary_exe_list)
+        user_defined_opts = {}
+        if automation_exe_list != None:
+            for item in automation_exe_list:
+                user_defined_opts[item['name']] = {
+                    'type': list(item)[1],
+                    'val': item[list(item)[1]]
+                }
         
         # Importing the target automation Module
         self.log_fileops.info("Importing " + target_automation)
@@ -1305,12 +1779,13 @@ class FileOpsQueue:
 
         # Starting the automation.run() main method.
         self.log_fileops.info("Start your engines " + target_automation + "!")
-        print("$.lst", automation_exe_list)
-        automation_py.run(iid, file_local_path, automation_exe_list)
+        automation_py.__bcamp_main__(iid, file_local_path, user_defined_opts)
 
-    ## ADDING FROM STACK - Get percentage complete based on src/dst size.
-    # https://stackoverflow.com/questions/29967487/get-progress-back-from-shutil-file-copy-thread
     def copyfileobj(self, fsrc, fdst, callback, length=0):
+        '''
+        ## ADDING FROM STACK - Get percentage complete based on src/dst size.
+        # https://stackoverflow.com/questions/29967487/get-progress-back-from-shutil-file-copy-thread
+        '''
         try:
             # check for optimisation opportunity
             if "b" in fsrc.mode and "b" in fdst.mode and fsrc.readinto:
@@ -1369,6 +1844,909 @@ class FileOpsQueue:
     def put(self, item):
         self.q.put(item)
 
+
+'''
+[Automations]
+
+This section contains classes and methods needed to import user-defined python
+extensions - called "Automations". This allows for bCamp to scale as 
+functionality can be expanded, adapting bCamp for any engineers workflow.
+
+As of the Beta, Automations are only called against Files within the
+filebrowser. Some examples include "ATD-Unpack" that decrypts "SupportBundle"
+log bundles, into a readable file for an engineer to review. A process that
+manually takes 5+ mins of file operations and terminal commands.
+'''
+class Automations:
+    '''
+    Main class to interact with "Automations" stored in the...
+    bcamp_root/extensions/automations directory. 
+
+    This includes compiling user-defined Python code to check for errors, and
+    updating the "basecamp.automations" table.
+    '''
+    def __init__(self):
+        self.RPATH = (str(pathlib.Path(__file__).parent.absolute())).rpartition('\\')[0]
+        # Configuring logging
+        setup_log('automations.log')
+        self.log = logging.getLogger('automations.log')
+
+        # Generate DB record of available imports during Init.
+        self.gen_automations_db()
+
+    def scan_automations_exeflavor(self):
+        '''
+        Getting all file 'stats' in /../automations
+        that comply with the expected format of
+        'name'/ [example.py], [properties.json]
+        '''
+        results_list = []
+        temp_list = [] # Tuple: (name, path, prop path)
+        # Getting temp_list values
+        self.log.info("Scanning './extensions/automations/' folder...")
+        with os.scandir(self.RPATH + "\\extensions\\automations") as folder:
+            for file in folder:
+                exe_path_str = (file.path + "\\" + file.name + ".exe")
+                if file.is_dir and os.access(file.path + "\\properties.json", os.R_OK) and os.access(exe_path_str, os.X_OK):
+                    self.log.info("Found " + file.name + "!")
+                    temp_list.append((file.name, exe_path_str, file.path + "\\properties.json"))
+
+        # Getting properties.json for each tuple in temp_list
+        # [(name, py path, properties.json path)]
+        for index, val in enumerate(temp_list):
+            with open(val[2], 'r') as read_file:
+                props = json.load(read_file)
+                if isinstance(props, dict):
+                    # Populate auto_details, a dict containing details 
+                    # for each Automation that will be added to results_dict.
+                    #
+                    # We also have to convert user_options to a binary format,
+                    # for easy iteration through the list of paths, even if
+                    # there is only one external exe.
+                    #
+                    # Empty user_options, i.e something that does not need to
+                    # leverage an external app, will be stored as an empty
+                    # list converted to binary format. 
+
+                    # Converting list to binary with pickle! :)
+                    options_list = props['options']
+                    b_options_list = pickle.dumps(options_list)
+
+                    # Creating source dictionary for DB import.
+                    auto_details = {
+                        'name': val[0],
+                        'enabled': "False", # Default is False,
+                        'version': props['version'],
+                        'exe_path': val[1],
+                        'exe_sha256': calc_md5(val[1]),
+                        'downloadFirst': props['downloadFirst'],
+                        'author': props['author'],
+                        'description': props['description'],
+                        'extensions': str(props['extensions']),
+                        'user_options': b_options_list,
+                        'type': props['type']
+                    }
+                    # Finally, add details to results_dict
+                    results_list.append(auto_details)
+                    self.log.info("Successfully imported 'properties.json' for " + "[" + val[0] + "]")
+                else:
+                    self.log.info("Failed to open 'properties.json' for " + "[" + val[0] + "]")
+        
+        return results_list
+
+    def scan_automations(self):
+        '''
+        Getting all file 'stats' in /../automations
+        that comply with the expected format of
+        'name'/ [example.py], [properties.json]
+        '''
+        results_list = []
+        temp_list = [] # Tuple: (name, path, prop path)
+        # Getting temp_list values
+        self.log.info("Scanning './extensions/automations/' folder...")
+        with os.scandir(self.RPATH + "\\extensions\\automations") as folder:
+            for file in folder:
+                py_path_str = (file.path + "\\" + "automation.py")
+                print("$..", py_path_str)
+                if file.is_dir and os.access(file.path + "\\properties.json", os.R_OK) and os.access(py_path_str, os.R_OK):
+                    self.log.info("Found " + file.name + "!")
+                    temp_list.append((file.name, py_path_str, file.path + "\\properties.json"))
+
+        # Testing unpacker.py for errors via compile. IF an error occurs, this
+        # path is removed from "temp_list" before reading the properties.json.
+        for index, val in enumerate(temp_list):
+            self.log.info("Checking " + "[" + val[0] + "]")
+            try:
+                # val[1]: Explicit Path / Optimize:2 Remove __debug__, asserts
+                # and docstrings, do_raise: Raises errors from nested .py to 
+                # this file.
+                py_compile.compile(val[1], optimize=2, doraise=True)
+                self.log.info("Successfully compiled! - " + "[" + val[0] + "]")
+                self.log.info("Deleting temporary .pyc file for" + "[" + val[0] + "]")
+                #converting val[1] to py_cache folder and deleting it.
+                delete_path = val[1].rpartition("\\")[0] + "\\__pycache__"
+                shutil.rmtree(delete_path)
+                self.log.info("Successfully removed temporary .pyc - " + "[" + val[0] + "]")
+            except Exception as error:
+                self.log.info("---< COMPILATION ERROR " + str("[" + val[0] + "]") + " >---\n\n" 
+                    + str(error)
+                    + "\n"
+                    )
+                temp_list.pop(index)
+
+        # Getting properties.json for each tuple in temp_list
+        # [(name, py path, properties.json path)]
+        for index, val in enumerate(temp_list):
+            with open(val[2], 'r') as read_file:
+                props = json.load(read_file)
+                if isinstance(props, dict):
+                    # Populate auto_details, a dict containing details 
+                    # for each Automation that will be added to results_dict.
+                    #
+                    # We also have to convert exe_paths to a binary format,
+                    # for easy iteration through the list of paths, even if
+                    # there is only one external exe.
+                    #
+                    # Empty exe_paths, i.e something that does not need to
+                    # leverage an external app, will be stored as an empty
+                    # list converted to binary format. 
+
+                    # Converting list to binary with pickle! :)
+                    options_lst = props['options']
+                    b_options_lst = pickle.dumps(options_lst)
+
+                    # Creating source dictionary for DB import.
+                    auto_details = {
+                        'name': val[0],
+                        'enabled': "False", # Default is False,
+                        'version': props['version'],
+                        'exe_path': val[1],
+                        'exe_sha256': calc_md5(val[1]),
+                        'downloadFirst': props['downloadFirst'],
+                        'author': props['author'],
+                        'description': props['description'],
+                        'extensions': str(props['extensions']),
+                        'user_options': b_options_lst,
+                        'type': props['type']
+                    }
+                    # Finally, add details to results_dict
+                    results_list.append(auto_details)
+                    self.log.info("Successfully imported 'properties.json' for " + "[" + val[0] + "]")
+                else:
+                    self.log.info("Failed to open 'properties.json' for " + "[" + val[0] + "]")
+        
+        return results_list
+
+    def gen_automations_db(self):
+        '''
+        '''
+        # To prevent DB drift from reality, ALL prev. records are removed 
+        # first before rebuilding Columns in the 'bcamp_automations' table.
+        # Before we delete the records, store any enabled automations to be
+        # re-enabled following scan.
+        prev_enabled_autos, prev_disabled_autos = get_automations_w_opts()
+
+        # Open connection to DB
+        dbshell, dbcon = open_dbshell()
+        dbshell.execute('''DELETE FROM bcamp_automations;''')
+        print("SQLite3: 'bcamp_automations' Purged for Refresh.")
+        # Iterate through list of Automation Details stored in dict...
+        avail_automations = self.scan_automations()
+        for auto in avail_automations:
+            # Execute the actual SQLite3 query for each item in list.
+            try:
+                dbshell.execute('''INSERT INTO bcamp_automations (
+                    name,
+                    enabled,
+                    version,
+                    exe_path,
+                    exe_sha256,
+                    downloadFirst,
+                    author,
+                    description,
+                    extensions,
+                    user_options,
+                    type)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?);''',
+                    (
+                    auto['name'],
+                    auto['enabled'],
+                    auto['version'],
+                    auto['exe_path'],
+                    auto['exe_sha256'],
+                    auto['downloadFirst'],
+                    auto['author'],
+                    auto['description'],
+                    auto['extensions'],
+                    auto['user_options'],
+                    auto['type']
+                    ))
+            except sqlite3.IntegrityError:
+                pass # Thrown for unique constraint failues/Dupes
+        dbcon.commit() # Save changes
+        dbcon.close() # Close connection
+
+        # Now, get automations once more and enable items that still exist in
+        # the extensions folder.
+        new_enabled_autos, new_disabled_autos = get_automations_w_opts()
+        for item in new_disabled_autos:
+            # Check if item[0] 'name' exist in prev_enabled_autos
+            if any([item[0] in i for i in prev_enabled_autos]):
+                # Set Enabled val to True for fresh import.
+                update_automation(item[0], 'enabled', 'True')
+                # Set user_options to previous value.
+                for auto_set in prev_enabled_autos:
+                    if auto_set[0] == item[0]:
+                        update_automation(item[0], 'user_options', auto_set[1])
+
+        print("SQLite3: 'bcamp_automations' Populated with Avail Automations.")
+
+    def get_avail(self):
+        '''
+        Called when the UI is initalized to scan the Automations dir,
+        and populate the DB with any available automations that have not been
+        added yet. 
+        '''
+        # Get dictionary of Automations...
+        print("...Fetching Automation's from DB...")
+        pprint.pprint(dump_automations())
+
+
+# ["bcamp_automations"] Table Queries
+def dump_automations():
+    '''
+    Returns all rows and columns within the Automations table
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT * FROM bcamp_automations;")
+    result = dbshell.fetchall()
+    dbcon.close()
+    return result    
+
+def get_automations_w_opts():
+    '''
+    Returns two list, enabled_autos and disabled_autos based on the 'enabled'
+    column value for successfully imported Automations.
+
+    Returned list only contain the "name" of each Automation.
+    '''
+    # Create connection to DB
+    dbshell, dbcon = open_dbshell()
+
+    # Get enabled autos...
+    dbshell.execute("SELECT name, user_options FROM bcamp_automations WHERE enabled = (?);", 
+        ('True',))
+    enabled_result = dbshell.fetchall()
+    #enabled_return = []
+    #for item in enabled_result:
+    #    enabled_return.append(item[0])
+
+    # Get disabled autos...
+    dbshell.execute("SELECT name, user_options FROM bcamp_automations WHERE enabled = (?);", 
+        ('False',))
+    disabled_result = dbshell.fetchall()
+    #disabled_return = []
+    #for item in disabled_result:
+    #    disabled_return.append(item[0])
+
+    # Close connection to DB and return results.
+    dbcon.close()
+    return enabled_result, disabled_result # Results are tuples
+
+def get_automations():
+    '''
+    Returns two list, enabled_autos and disabled_autos based on the 'enabled'
+    column value for successfully imported Automations.
+
+    Returned list only contain the "name" of each Automation.
+    '''
+    # Create connection to DB
+    dbshell, dbcon = open_dbshell()
+
+    # Get enabled autos...
+    dbshell.execute("SELECT name FROM bcamp_automations WHERE enabled = (?);", 
+        ('True',))
+    enabled_result = dbshell.fetchall()
+    enabled_return = []
+    for item in enabled_result:
+        enabled_return.append(item[0])
+
+    # Get disabled autos...
+    dbshell.execute("SELECT name FROM bcamp_automations WHERE enabled = (?);", 
+        ('False',))
+    disabled_result = dbshell.fetchall()
+    disabled_return = []
+    for item in disabled_result:
+        disabled_return.append(item[0])
+
+    # Close connection to DB and return results.
+    dbcon.close()
+    return enabled_return, disabled_return # Results are tuples
+
+def query_automation(target_auto, column):
+    '''
+    Returns a single column from the Automations table for the defined
+    target automations.
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " + column + " FROM bcamp_automations WHERE name = (?);", 
+        (target_auto,))
+    result = dbshell.fetchone()
+    dbcon.close()
+    return result[0] # Results are tuples, but we expect ONLY 1 value here.
+
+def update_automation(target_auto, column, value):
+    '''
+    Updates a column value for a specific target automation with the new 
+    'value' variable
+    '''
+    dbshell, dbcon = open_dbshell()
+    
+    dbshell.execute("UPDATE bcamp_automations SET " + column + " = (?) WHERE name = (?)", (value, target_auto))
+    dbcon.commit() # save changes
+    dbcon.close()
+    #print("SQLite3: *bcamp_automations*:",target_auto, column, "=", value)
+
+
+
+'''
+[CasePoll Daemon]
+Daemon Thread used to periodically poll the imported SR Remote Directory, and
+any JIRA issues assigned to an imported SR. This is used to notify an Engineer
+when there are new uploads, or changes to the state of an JIRA issue.
+'''
+class CasePollDaemon:
+    '''
+    Daemon Thread used to periodically poll the imported SR Remote Directory, and
+    any JIRA issues assigned to an imported SR. This is used to notify an Engineer
+    when there are new uploads, or changes to the state of an JIRA issue.
+    '''
+    def __init__(self, Gui):
+        self.poll_frequency = (60000 * 15) # 15 minutes
+
+        # Core Vars
+        self.q = queue.Queue()
+        self.results = callbackVar()
+        self.thread_running = callbackVar()
+        self.prog_val = callbackVar()
+        self.Gui = Gui
+        self.Gui.JIRA_ENABLED.register_callback(self.start_manual_poll)
+
+        # Starting worker_thread.
+        threading.Thread(target=self.worker_thread,
+            name='CasePoll-Daemon',
+            daemon=True).start()
+
+    def worker_thread(self):
+        '''
+        Daemon Thread for FileOpsQueue
+        '''
+        while True: # Infin. Loop
+            item = self.q.get()
+            item.start() # Starting 'start_poll' method.
+            # Enter nested while until 'item' thread is complete.
+            while item.is_alive():
+                time.sleep(0.5)
+                
+            # Exit and go to next item in Queue if any.
+            self.q.task_done()
+
+    def start_poll(self):
+        '''
+        This method is called during init, then every 15 minutes - Defining
+        the main poll logic, getting the imported SR's, and adding the 
+        necessary scans to the 'worker_thread' to be launched!
+        '''
+        # Create logic thread obj, and put into Daemon queue.
+        poll_thread = threading.Thread(target=self.logic, name='CasePoll.thread')
+        self.q.put(poll_thread)
+        print("**** PollThread starting again in", self.poll_frequency, "ms")
+        self.Gui.after(self.poll_frequency, self.start_poll)
+
+    def start_manual_poll(self, callbackVal=None):
+        '''
+        Start poll without the period call for next scan. Used for user scans.
+        '''
+        poll_thread = threading.Thread(target=self.logic, name='CasePoll.thread')
+        self.q.put(poll_thread)
+
+    def logic(self):
+        ##################################################################
+        print("\n\n**** PollThread ****")
+        self.thread_running.value = True
+        # Get SR and JIRA ID, and JIRA API enabled values.
+        sr_sets = query_bugs()
+        devmode = get_config('dev_mode')
+
+        result_dict = {}
+        total_cnt = len(sr_sets)
+        index_counter = 1
+        for item in sr_sets:
+            new_sts = None
+            new_prog = "("+ str(index_counter) + "/" + str(total_cnt) +")"
+            self.prog_val.value = new_prog
+            # item[0] = SR Number
+            # item[1] = JIRA ID -or- None
+            # Get cur. remote root count
+            new_cnt = self.get_remotedir_count(item[0])
+            if devmode == 'True':
+                # Get cur. status for assigned JIRA issue.
+                if item[1] != None:
+                    new_sts = self.get_jira_status(item[0], item[1], devmode)
+            else:  
+                if self.Gui.JIRA_ENABLED.value:
+                    # Get cur. status for assigned JIRA issue.
+                    if item[1] != None:
+                        new_sts = self.get_jira_status(item[0], item[1], devmode)
+            result_dict[item[0]] = {
+                'new_files': new_cnt, # None if og_file cnt = new_cnt
+                'jira_id': item[1],
+                'jira_status': new_sts 
+            }
+            index_counter += 1
+
+        # Update 'self.results.value' with returns.
+        self.results.value = result_dict
+        # CaseViewer.after() recursive call after 'X' time.
+
+        self.prog_val.value = '(JIRA API)'
+        # CHECKING USER JIRA CASES YET TO BE IMPORTED...
+        new_import_data = {
+            'type': 'jira',
+            'case_data': []
+        }
+
+        if self.Gui.JIRA_ENABLED.value:
+            missing_srs = jira_getuser_issues()
+            if missing_srs != None:
+                for data in missing_srs:
+                    jira_notify_var = 0
+                    if data['issue_status'] == 'Need Info':
+                        jira_notify_var = 1
+                    case_vals = {
+                        "sr_number": data['issue_sr'],
+                        "notes": None,
+                        "bug_id": data['issue_key'],
+                        "product": data['issue_product'],
+                        "account": data['issue_account'],
+                        # These vars will goto their own independent tables.
+                        "tags_list": [], #[List] of tags
+                        "files": None, #{dict} of 'remote','local' file{}
+                        # Empty Vals to populate Import Dict.
+                        'pinned': None,
+                        'workspace': None,
+                        'customs_list': None,
+                        'download_flag': 0,
+                        'jira_status': data['issue_status'],
+                        'jira_notify_flag': jira_notify_var
+                        }
+                    new_import_data['case_data'].append(case_vals)
+                self.Gui.import_item.value = new_import_data
+                #self.Gui.CaseViewer.refresh_casetiles_callback()
+        self.thread_running.value = False
+        ##################################################################
+
+    def get_remotedir_count(self, key_val):
+        '''
+        Counts the files in the remote DIR for target 'key_val' and compares 
+        the results to the 'last_file"
+        '''
+        #Count the number of files or dirs present at root only.
+        #Getting key_val root path
+        rootpath = query_case(key_val, 'remote_path')
+            #Counting...
+        try:
+            fresh_count = len(os.listdir(rootpath))
+        except FileNotFoundError:
+            fresh_count = 0
+
+        # Get 'last_file_cnt' from DB for return comparison.
+        # NOTE, 'last_file_cnt' will return None for SR's that havent been 
+        # launched in the workbench yet. These will be excepted before the
+        # return comparison.
+        og_count = query_case(key_val, 'last_file_count')
+        if og_count == None:
+            og_count = fresh_count
+
+        if fresh_count > int(og_count):
+            return fresh_count - int(og_count)
+        elif fresh_count <= int(og_count):
+            return None
+    
+    def get_jira_status(self, key_val, jira_id, devMode):
+        '''
+        Gets the status of 'jira_id', and returns to be passed into the result
+        dictionary.  
+        '''
+        jira_id = jira_id.strip()
+        data = jira_getissue(jira_id, devMode)
+        if data == None:
+            print("No JIRA data for ->", key_val, jira_id)
+            return None
+
+        # Check updated value, if more recent than DB 'jira_updated', notify.
+        og_updated = query_case(key_val, 'jira_updated')
+        if data.updated == og_updated and data.updated != None:
+            #return None
+            return data.status
+        else:
+            jira_update_db(key_val, data)
+            return data.status
+
+
+'''
+[ JIRA METHODS ]
+
+Various convience methods to interact with the production JIRA server via the
+JIRA API and save content to the basecamp.db.
+'''
+class JiraIssue:
+    '''
+    Returned object containing various keywords for a specific issue within
+    JIRA API when using the 'rest/api/2/issue/*key*' call.
+    '''
+    def __init__(self, title, status, updated_time, description, 
+        sr_owner, key, comments, last_comment_time, issuelinks, priority,
+        components, affected_ver, resolution, fix_ver, project):
+        self._title = title
+        self._status = status
+        self._updated_time = updated_time
+        self._description = description
+        self._sr_owner = sr_owner
+        self._key = key
+        self._comments = comments
+        self._last_comment_time = last_comment_time
+        self._issuelinks = issuelinks
+        self._priority = priority
+        self._components = components
+        self._affected_ver = affected_ver
+        self._resolution = resolution
+        self._fix_ver = fix_ver
+        self._project = project
+
+    @property
+    def key(self):
+        return self._key
+
+    @property
+    def title(self):
+        return self._title
+
+    @property
+    def status(self):
+        return self._status
+
+    @property
+    def updated(self):
+        return self._updated_time
+
+    @property
+    def description(self):
+        return self._description  
+
+    @property
+    def sr_owner(self):
+        return self._sr_owner
+
+    @property
+    def comments(self):
+        return self._comments
+
+    @property
+    def last_comment_time(self):
+        return self._last_comment_time
+
+    @property
+    def linkedissues(self):
+        return self._issuelinks
+
+    @property
+    def fix_ver(self):
+        return self._fix_ver
+    
+    @property
+    def priority(self):
+        return self._priority
+    
+    @property
+    def components(self):
+        return self._components
+    
+    @property
+    def affected_ver(self):
+        return self._affected_ver
+    
+    @property
+    def resolution(self):
+        return self._resolution
+
+    @property
+    def project(self):
+        return self._project
+
+# JIRA-API 
+def jira_response(url, user, passwd):
+    '''
+    Returns '<Response [XXX]>' string, using the 'request.get' method.
+    '''
+    rawdata = requests.get(url, auth=(user, passwd))
+    return str(rawdata)
+
+def jira_db_sec(secret):
+    os.environ['BCAMP'] = secret
+
+def jira_getissue(jira_id, devMode):
+    '''
+    Generates a JiraIssue object for 'jira_id'
+    '''
+    jira_id = jira_id.strip()
+    request = 'rest/api/2/issue/' + jira_id
+    urlroot = 'https://jira-lvs.prod.mcafee.com/'
+    request_url = urlroot + request
+    if devMode == 'True':
+        # Try get pass from secret file.
+        sec = BCAMP_ROOTPATH + "\\" + '_dev_nas' + '\\' + 'jira.secret'
+        _f = open(sec)
+        rawdata = requests.get(request_url, auth=(os.getlogin(), _f.read()))
+    else:
+        try:
+            ## Add timeout here??   
+            rawdata = requests.get(request_url, auth=(os.getlogin(), os.environ['BCAMP']), timeout=(3.05, 15.05))
+        except:
+            print('***> TIMEOUT ', jira_id)
+            return
+    try:  
+        data = rawdata.json()
+    except:
+        print("@... EXITING JIRA API")
+        return
+    
+    # PULLING DETAILS FROM JSON -> PYTHON DICT
+    status = data['fields']['status']['name']
+    title = data['fields']['summary']
+    updated_time = data['fields']['updated']
+    description = data['fields']['description']
+    sr_owner = data['fields']['customfield_22700']
+    key = data['key']
+    comment_cnt = int(data['fields']['comment']['total'])
+    comments = data['fields']['comment']['comments'] #LST
+    #print("\t\t*****\n", comments)
+    if comment_cnt != 0:
+        last_comment = comments[comment_cnt - 1]
+        last_comment_time = last_comment['updated']
+    else:
+        last_comment = None
+        last_comment_time = None
+    priority = data['fields']['priority']['name']
+    components = data['fields']['components'] #LST
+    affected_ver = data['fields']['versions'] # LST
+    resolution = data['fields']['resolution']
+    fix_ver = data['fields']['fixVersions'] #LST
+    project = data['fields']['project']['name']
+
+    # Get Nested/Linked Issues being worked by Dev (ex. TSNS -> NSPMGR)
+    issuelinks_res = []
+    issuelinks = data['fields']['issuelinks']
+    for issue in issuelinks:
+        linked_key = issue['inwardIssue']['key']
+        linked_title = issue['inwardIssue']['fields']['summary']
+        linked_status = issue['inwardIssue']['fields']['status']['name']
+        issuelinks_res.append({'key': linked_key, 'title':linked_title, 'status':linked_status})
+
+    #print("*DEBUG")
+    #print(priority)
+    #print(components)
+    #print(affected_ver)
+    #print(resolution)
+    #print(fix_ver)
+    #print(project)
+    #print("/*DEBUG")
+
+    return JiraIssue(title=title, status=status, updated_time=updated_time, 
+        description=description, sr_owner=sr_owner, key=key, 
+        comments=comments, last_comment_time=last_comment_time, 
+        issuelinks=issuelinks_res, priority=priority, components=components,
+        affected_ver=affected_ver, resolution=resolution, fix_ver=fix_ver,
+        project=project)
+
+def jira_getuser_issues():
+    '''
+    customfield_22330 = Linked SR State (Open, Closed...)
+
+    HUMAN JQL BELOW:
+    watcher = currentUser() AND (Resolution = Unresolved AND status != Done)
+
+    RAW JQL:
+    jql=watcher%20%3D%20currentUser()%20AND%20(Resolution%20%3D%20Unresolved%20AND%20status%20!%3D%20Done)
+    '''
+    # DEFINE API CALL.
+    request = '/rest/api/2/search?'
+    jql = '''jql=watcher%20%3D%20"''' + os.getlogin() + '''"%20AND%20(resolution%20%3D%20
+        Unresolved%20AND%20status%20!%3D%20Done%20AND%20"Support%20Status"%20
+        !~%20Closed)'''
+    urlroot = 'https://jira-lvs.prod.mcafee.com'
+    request_url = urlroot + request + jql
+
+    # CONNECT TO JIRA API AND GET JSON DATA FOR QUERY.
+    devMode = get_config('dev_mode')
+    if devMode == 'True':
+        # Try get pass from secret file.
+        sec = BCAMP_ROOTPATH + "\\" + '_dev_nas' + '\\' + 'jira.secret'
+        _f = open(sec)
+        rawdata = requests.get(request_url, auth=(os.getlogin(), _f.read()))
+    else: 
+        print("!!!!")
+        try:
+            rawdata = requests.get(request_url, auth=(os.getlogin(), os.environ['BCAMP']), timeout=(3.05, 15.05))
+        except:
+            print("***ALL-SCAN TIMEOUT")
+            return None
+
+    # GET SR NUMBERS FROM JSON RETURNED FROM API. 
+    api_result = rawdata.json()
+    parser_result = []
+    for issue in api_result['issues']:
+        issue_dict = {
+        'issue_sr': issue['fields']['customfield_22312'],
+        'issue_key': issue['key'],
+        'issue_product': issue['fields']['customfield_22326'],
+        'issue_account': issue['fields']['customfield_22306'],
+        'issue_status': issue['fields']['status']['name']
+        }
+        parser_result.append(issue_dict)
+    
+    return parser_result
+
+# JIRA-SQLite3 Methods
+def jira_update_db(key_val, JiraIssue):
+    '''
+    Parses the 'JiraIssue' object and saves the new values found in the 
+    'cases' table in the DB. A list of Vars found in 'JiraIssue' are below.
+
+    title = Called 'Summary' in JIRA.
+    status = The Dev Status of the bug.
+    updated_time = The last update time, any change
+    description = The actual description set by the TSE.
+    sr_owner = The Owner of the SR linked to the ISSUE.
+    key = The 'Reference' ID, such as 'TSNS-271092'
+    comments = Last Comment JSON - Pickled into DB.
+    last_comment_time = Timestamp from the most recent comment
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute('''UPDATE cases SET 
+        jira_title = (?),
+        jira_status = (?),
+        jira_updated = (?),
+        jira_description = (?),
+        jira_sr_owner = (?),
+        jira_comments = (?),
+        jira_last_comment_time = (?),
+        jira_linkedissues = (?),
+        jira_project = (?),
+        jira_priority = (?),
+        jira_components = (?),
+        jira_affected_ver = (?),
+        jira_resolution = (?),
+        jira_fix_ver= (?)
+        WHERE sr_number = (?)''',
+        (
+        JiraIssue.title,
+        JiraIssue.status,
+        JiraIssue.updated,
+        JiraIssue.description,
+        JiraIssue.sr_owner,
+        pickle.dumps(JiraIssue.comments),
+        JiraIssue.last_comment_time,
+        pickle.dumps(JiraIssue.linkedissues),
+        JiraIssue.project,
+        JiraIssue.priority,
+        pickle.dumps(JiraIssue.components),
+        pickle.dumps(JiraIssue.affected_ver),
+        JiraIssue.resolution,
+        pickle.dumps(JiraIssue.fix_ver),
+        key_val
+        )
+    )
+    dbcon.commit() # Save Changes.
+    dbcon.close()
+    print("SQLite3: *Cases* JIRA values updated for", key_val)
+
+def jira_get_comment_db(key_val):
+    '''
+    {'self': 'https://jira-lvs.prod.mcafee.com/rest/api/2/issue/3146519/comment/5645871', 
+    'id': '5645871', 
+    'author': 
+        {'self': 'https://jira-lvs.prod.mcafee.com/rest/api/2/user?username=csaopaul', 
+        'name': 'csaopaul', 
+        'key': 'csaopaul', 
+        'emailAddress': 'Claudio_SaoPaulo@McAfee.com', 
+        'avatarUrls': {'48x48': 'https://jira-lvs.prod.mcafee.com/secure/useravatar?avatarId=10122', (etc...)
+        'displayName': 'SaoPaulo, Claudio (Enterprise)', 
+        'active': True, 
+        'timeZone': 'America/Los_Angeles'
+        }, 
+    'body': 'NSM BUGScrub 10/07/2021: A BUG was created.\r\n\r\nEngineering will provide an update earlier next week.', 
+    'updateAuthor': 
+        {'self': 'https://jira-lvs.prod.mcafee.com/rest/api/2/user?username=csaopaul', 
+        'name': 'csaopaul', 
+        'key': 'csaopaul', 
+        'emailAddress': 
+        'Claudio_SaoPaulo@McAfee.com', 
+        'avatarUrls': {'48x48': 'https://jira-lvs.prod.mcafee.com/secure/useravatar?avatarId=10122', (etc...)
+        'displayName': 'SaoPaulo, Claudio (Enterprise)', 
+        'active': True, 
+        'timeZone': 'America/Los_Angeles'}, 
+        'created': '2021-10-07T06:07:29.766-0700', 
+        'updated': '2021-10-07T06:07:29.766-0700'
+        }
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT jira_comments FROM cases WHERE sr_number = (?);", 
+        (key_val,))
+    result = dbshell.fetchone()[0]
+    dbcon.close()
+    try:
+        decoded = pickle.loads(result)
+        return decoded
+    except:
+        return None
+
+def jira_get_issuelinks(key_val):
+    '''
+    {'self': 'https://jira-lvs.prod.mcafee.com/rest/api/2/issue/3146519/comment/5645871', 
+    'id': '5645871', 
+    'author': 
+        {'self': 'https://jira-lvs.prod.mcafee.com/rest/api/2/user?username=csaopaul', 
+        'name': 'csaopaul', 
+        'key': 'csaopaul', 
+        'emailAddress': 'Claudio_SaoPaulo@McAfee.com', 
+        'avatarUrls': {'48x48': 'https://jira-lvs.prod.mcafee.com/secure/useravatar?avatarId=10122', (etc...)
+        'displayName': 'SaoPaulo, Claudio (Enterprise)', 
+        'active': True, 
+        'timeZone': 'America/Los_Angeles'
+        }, 
+    'body': 'NSM BUGScrub 10/07/2021: A BUG was created.\r\n\r\nEngineering will provide an update earlier next week.', 
+    'updateAuthor': 
+        {'self': 'https://jira-lvs.prod.mcafee.com/rest/api/2/user?username=csaopaul', 
+        'name': 'csaopaul', 
+        'key': 'csaopaul', 
+        'emailAddress': 
+        'Claudio_SaoPaulo@McAfee.com', 
+        'avatarUrls': {'48x48': 'https://jira-lvs.prod.mcafee.com/secure/useravatar?avatarId=10122', (etc...)
+        'displayName': 'SaoPaulo, Claudio (Enterprise)', 
+        'active': True, 
+        'timeZone': 'America/Los_Angeles'}, 
+        'created': '2021-10-07T06:07:29.766-0700', 
+        'updated': '2021-10-07T06:07:29.766-0700'
+        }
+    '''
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT jira_linkedissues FROM cases WHERE sr_number = (?);", 
+        (key_val,))
+    result = dbshell.fetchone()[0]
+    dbcon.close()
+    if result != None:
+        dec_res = pickle.loads(result)
+    else:
+        dec_res = None
+    return dec_res
+
+
+'''
+[Filebrowser Logic]
+
+The below methods crawl through the local and remote dirs, extracting file
+metadata (File Size, Creation time, Paths). The resulting data has two 
+purposes.
+
+1 - Being rendered within the UI (Basecamp.Tk_Filebrowser)
+2 - Stored in the SQLite3 DB for future rendering, and references.
+
+The "FileOpsQueue" class is a *Queue* daemon that manages *Threading.threads*
+utilized by the Basecamp.Tk_Filebrowser class for downloads, uploads, and
+Automations. This queue (FIFO) is global, meaning all open cases use the same
+queue. This is to optimize performance by reducing disk chaos.
+'''
 # General Methods used by the UI
 def generate_file_record(self, key_val):
     '''
@@ -1625,20 +3003,20 @@ def generate_file_record(self, key_val):
 
     # First, Check if we can access remote root path, and key_val remote
     if os.access(get_config('remote_root'), os.R_OK):
-        if not os.access(query_sr(key_val, "remote_path"), os.R_OK):
+        if not os.access(query_case(key_val, "remote_path"), os.R_OK):
             print("No files uploaded to Remote Share.")
         else:
             remote_exist = True
-            remote_root = query_sr(key_val, "remote_path")
+            remote_root = query_case(key_val, "remote_path")
     else:
         print("ERROR - UNABLE TO LOCATE REMOTE ROOT FOLDER : CHECK VPN")
 
     # Second, check if there are local files for key_val.
-    if not os.access(query_sr(key_val, "local_path"), os.R_OK):
+    if not os.access(query_case(key_val, "local_path"), os.R_OK):
         print("No files available in Local Share.")
     else:
         local_exist = True
-        local_root = query_sr(key_val, "local_path")
+        local_root = query_case(key_val, "local_path")
 
     # Generator Loops to iterate through files in order of Depth.
     # We attempt the remote path first, then the local. "Returned"
@@ -1702,6 +3080,24 @@ def open_in_windows(file_path):
     except OSError:
         print("*bcamp_api*: WINDOWS ERROR - No default application associated.")
 
+def refresh_filetrees(key_val, FileBrowser):
+    '''
+    Refreshes the File-Trees with an independent thread not in the FileOpsQ.
+    '''
+    remote_refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('remote', False),
+            name=(FileBrowser.key_value + "::remote_refresh")
+        )
+    local_refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('local', False),
+            name=(FileBrowser.key_value + "::remote_refresh")
+        )
+    # Starting threads together.
+    remote_refresh_thread.start()
+    local_refresh_thread.start()
+
 def download_all_files(key_val, FileOpsQ, FileBrowser):
     '''
     Querys the DB for all files in the remote location, and puts a 'download' 
@@ -1710,13 +3106,18 @@ def download_all_files(key_val, FileOpsQ, FileBrowser):
     download.
     '''
     # Get all file paths in remote folder saved in DB.
-    rfiles = query_all_files_remote(key_val, 'path')
-    print("$api.", rfiles)
+    lfiles = query_all_files_remote_depth(key_val, 'path', 0)
+    print("$api.", lfiles)
     # Iter. paths and submit using FOQ
-    for fpath in rfiles:
+    for fpath in lfiles:
         FileOpsQ.add_download(key_val, fpath)
         # Now add refresh to update UI
-        FileBrowser.refresh_file_record(mode='local', enableParser=False)
+        refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('local', False),
+            name=(FileBrowser.key_value + "::local_refresh")
+        )
+        FileOpsQ.put(refresh_thread)
 
 def upload_all_files(key_val, FileOpsQ, FileBrowser):
     '''
@@ -1726,13 +3127,18 @@ def upload_all_files(key_val, FileOpsQ, FileBrowser):
     upload.
     '''
     # Get all file paths in remote folder saved in DB.
-    lfiles = query_all_files_local(key_val, 'path')
+    lfiles = query_all_files_local_depth(key_val, 'path', 0)
     print("$api.", lfiles)
     # Iter. paths and submit using FOQ
     for fpath in lfiles:
         FileOpsQ.add_upload(key_val, fpath)
         # Now add refresh to update UI
-        FileBrowser.refresh_file_record(mode='remote', enableParser=False)
+        refresh_thread = threading.Thread(
+            target=FileBrowser.refresh_file_record,
+            args=('remote', False),
+            name=(FileBrowser.key_value + "::remote_refresh")
+        )
+        FileOpsQ.put(refresh_thread)
 
 # ["files_X"] Table Queries 
 def create_files_table(key_val):
@@ -1774,7 +3180,7 @@ def update_files(key_val, updated_record):
         ? ADD DEPTH VAL?
     '''
     # Get file_table of key_val
-    table_id = query_sr(key_val, 'files_table')
+    table_id = query_case(key_val, 'files_table')
     dbshell, dbcon = open_dbshell()
     for file in updated_record:
         dbshell.execute("INSERT INTO " + table_id + """(
@@ -1855,6 +3261,30 @@ def query_all_files_column(key_val, column):
 
     return final_result # Results are tuples containing all columns per tuple.
 
+def query_all_files_local(key_val, column):
+    '''
+    Returns a list of the value found in 'column' for a target 'key_val' 
+    in the 'filesX' table of the DB filtered by local files ONLY.
+    '''
+    # Remove "-" from key_val
+    form_key_val = str(key_val).replace("-", "")
+    table_name = "files" + form_key_val
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " 
+        + column 
+        + " FROM " 
+        + table_name 
+        + " WHERE location = (?) ;",
+        ('local',))
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Correct result formatting into a direct list obj.
+    final_result = []
+    for item in result:
+        final_result.append(item[0])
+
+    return final_result # Results are tuples containing all columns per tuple.
+
 def query_all_files_remote(key_val, column):
     '''
     Returns a list of the value found in 'column' for a target 'key_val' 
@@ -1879,10 +3309,13 @@ def query_all_files_remote(key_val, column):
 
     return final_result # Results are tuples containing all columns per tuple.
 
-def query_all_files_local(key_val, column):
+def query_all_files_local_depth(key_val, column, depth):
     '''
     Returns a list of the value found in 'column' for a target 'key_val' 
-    in the 'filesX' table of the DB filtered by local files ONLY.
+    in the 'filesX' table of the DB filtered by local files and provided
+    depth index.
+
+    depth=0 returns root local files.
     '''
     # Remove "-" from key_val
     form_key_val = str(key_val).replace("-", "")
@@ -1892,8 +3325,35 @@ def query_all_files_local(key_val, column):
         + column 
         + " FROM " 
         + table_name 
-        + " WHERE location = (?) ;",
-        ('local',))
+        + " WHERE location = (?) AND depth_index = (?);",
+        ('local', depth))
+    result = dbshell.fetchall()
+    dbcon.close()
+    # Correct result formatting into a direct list obj.
+    final_result = []
+    for item in result:
+        final_result.append(item[0])
+
+    return final_result # Results are tuples containing all columns per tuple.
+
+def query_all_files_remote_depth(key_val, column, depth):
+    '''
+    Returns a list of the value found in 'column' for a target 'key_val' 
+    in the 'filesX' table of the DB filtered by remote files and provided
+    depth index.
+
+    depth=0 returns root remote files.
+    '''
+    # Remove "-" from key_val
+    form_key_val = str(key_val).replace("-", "")
+    table_name = "files" + form_key_val
+    dbshell, dbcon = open_dbshell()
+    dbshell.execute("SELECT " 
+        + column 
+        + " FROM " 
+        + table_name 
+        + " WHERE location = (?) AND depth_index = (?);",
+        ('remote', depth))
     result = dbshell.fetchall()
     dbcon.close()
     # Correct result formatting into a direct list obj.
@@ -2002,256 +3462,6 @@ def remove_fav_file(file_path):
 
 
 '''
-[Automations]
-
-This section contains classes and methods needed to import user-defined python
-extensions - called "Automations". This allows for bCamp to scale as 
-functionality can be expanded, adapting bCamp for any engineers workflow.
-
-As of the Beta, Automations are only called against Files within the
-filebrowser. Some examples include "ATD-Unpack" that decrypts "SupportBundle"
-log bundles, into a readable file for an engineer to review. A process that
-manually takes 5+ mins of file operations and terminal commands.
-'''
-
-
-class Automations:
-    '''
-    Main class to interact with "Automations" stored in the...
-    bcamp_root/extensions/automations directory. 
-
-    This includes compiling user-defined Python code to check for errors, and
-    updating the "basecamp.automations" table.
-    '''
-    def __init__(self):
-        self.RPATH = (str(pathlib.Path(__file__).parent.absolute())).rpartition('\\')[0]
-        # Configuring logging
-        setup_log('automations.log')
-        self.log = logging.getLogger('automations.log')
-
-        # Generate DB record of available imports during Init.
-        self.gen_automations_db()
-
-    def scan_automations(self):
-        '''
-        Getting all file 'stats' in /../automations
-        that comply with the expected format of
-        'name'/ [example.py], [properties.json]
-        '''
-        results_list = []
-        temp_list = [] # Tuple: (name, path, prop path)
-        # Getting temp_list values
-        self.log.info("Scanning './extensions/automations/' folder...")
-        with os.scandir(self.RPATH + "\\extensions\\automations") as folder:
-            for file in folder:
-                if file.is_dir and os.access(file.path + "\\properties.json", os.R_OK):
-                    self.log.info("Found " + file.name + "!")
-                    temp_list.append((file.name, file.path + "\\automation.py", file.path + "\\properties.json"))
-
-        # Testing unpacker.py for errors via compile. IF an error occurs, this
-        # path is removed from "temp_list" before reading the properties.json.
-        for index, val in enumerate(temp_list):
-            self.log.info("Checking " + "[" + val[0] + "]")
-            try:
-                # val[1]: Explicit Path / Optimize:2 Remove __debug__, asserts
-                # and docstrings, do_raise: Raises errors from nested .py to 
-                # this file.
-                py_compile.compile(val[1], optimize=2, doraise=True)
-                self.log.info("Successfully compiled! - " + "[" + val[0] + "]")
-                self.log.info("Deleting temporary .pyc file for" + "[" + val[0] + "]")
-                #converting val[1] to py_cache folder and deleting it.
-                delete_path = val[1].rpartition("\\")[0] + "\\__pycache__"
-                shutil.rmtree(delete_path)
-                self.log.info("Successfully removed temporary .pyc - " + "[" + val[0] + "]")
-            except Exception as error:
-                self.log.info("---< COMPILATION ERROR " + str("[" + val[0] + "]") + " >---\n\n" 
-                    + str(error)
-                    + "\n"
-                    )
-                temp_list.pop(index)
-
-        # Getting properties.json for each tuple in temp_list
-        # [(name, py path, properties.json path)]
-        for index, val in enumerate(temp_list):
-            with open(val[2], 'r') as read_file:
-                props = json.load(read_file)
-                if isinstance(props, dict):
-                    # Populate auto_details, a dict containing details 
-                    # for each Automation that will be added to results_dict.
-                    #
-                    # We also have to convert exe_paths to a binary format,
-                    # for easy iteration through the list of paths, even if
-                    # there is only one external exe.
-                    #
-                    # Empty exe_paths, i.e something that does not need to
-                    # leverage an external app, will be stored as an empty
-                    # list converted to binary format. 
-
-                    # Converting list to binary with pickle! :)
-                    exe_list = props['exe']
-                    binary_exe_list = pickle.dumps(exe_list)
-
-                    # Creating source dictionary for DB import.
-                    auto_details = {
-                        'name': val[0],
-                        'enabled': "False", # Default is False,
-                        'version': props['version'],
-                        'py_path': val[1],
-                        'py_md5': calc_md5(val[1]),
-                        'downloadFirst': props['downloadFirst'],
-                        'author': props['author'],
-                        'description': props['description'],
-                        'extensions': str(props['extensions']),
-                        'exe_paths': binary_exe_list,
-                        'type': props['type']
-                    }
-                    # Finally, add details to results_dict
-                    results_list.append(auto_details)
-                    self.log.info("Successfully imported 'properties.json' for " + "[" + val[0] + "]")
-                else:
-                    self.log.info("Failed to open 'properties.json' for " + "[" + val[0] + "]")
-        
-        return results_list
-
-    def gen_automations_db(self):
-        '''
-        '''
-        # To prevent DB drift from reality, ALL prev. records are removed 
-        # first before rebuilding Columns in the 'bcamp_automations' table.
-        # Before we delete the records, store any enabled automations to be
-        # re-enabled following scan.
-        prev_enabled_autos, prev_disabled_autos = get_automations()
-        print("$.prev", prev_enabled_autos)
-
-
-        # Open connection to DB
-        dbshell, dbcon = open_dbshell()
-        dbshell.execute('''DELETE FROM bcamp_automations;''')
-        print("SQLite3: 'bcamp_automations' Purged for Refresh.")
-        # Iterate through list of Automation Details stored in dict...
-        avail_automations = self.scan_automations()
-        for auto in avail_automations:
-            # Execute the actual SQLite3 query for each item in list.
-            try:
-                dbshell.execute('''INSERT INTO bcamp_automations (
-                    name,
-                    enabled,
-                    version,
-                    py_path,
-                    py_md5,
-                    downloadFirst,
-                    author,
-                    description,
-                    extensions,
-                    exe_paths,
-                    type)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?);''',
-                    (
-                    auto['name'],
-                    auto['enabled'],
-                    auto['version'],
-                    auto['py_path'],
-                    auto['py_md5'],
-                    auto['downloadFirst'],
-                    auto['author'],
-                    auto['description'],
-                    auto['extensions'],
-                    auto['exe_paths'],
-                    auto['type']
-                    ))
-            except sqlite3.IntegrityError:
-                pass # Thrown for unique constraint failues/Dupes
-        dbcon.commit() # Save changes
-        dbcon.close() # Close connection
-
-        # Now, get automations once more and enable items that still exist in
-        # the extensions folder.
-        new_enabled_autos, new_disabled_autos = get_automations()
-        print("$.new(dis/en)", new_disabled_autos, new_enabled_autos)
-        for item in new_disabled_autos:
-            if item in prev_enabled_autos:
-                update_automation(item, 'enabled', 'True')
-
-        print("SQLite3: 'bcamp_automations' Populated with Avail Automations.")
-
-    def get_avail(self):
-        '''
-        Called when the UI is initalized to scan the Automations dir,
-        and populate the DB with any available automations that have not been
-        added yet. 
-        '''
-        # Get dictionary of Automations...
-        print("...Fetching Automation's from DB...")
-        pprint.pprint(dump_automations())
-
-
-# ["bcamp_automations"] Table Queries
-def dump_automations():
-    '''
-    Returns all rows and columns within the Automations table
-    '''
-    dbshell, dbcon = open_dbshell()
-    dbshell.execute("SELECT * FROM bcamp_automations;")
-    result = dbshell.fetchall()
-    dbcon.close()
-    return result    
-
-def get_automations():
-    '''
-    Returns two list, enabled_autos and disabled_autos based on the 'enabled'
-    column value for successfully imported Automations.
-
-    Returned list only contain the "name" of each Automation.
-    '''
-    # Create connection to DB
-    dbshell, dbcon = open_dbshell()
-
-    # Get enabled autos...
-    dbshell.execute("SELECT name FROM bcamp_automations WHERE enabled = (?);", 
-        ('True',))
-    enabled_result = dbshell.fetchall()
-    enabled_return = []
-    for item in enabled_result:
-        enabled_return.append(item[0])
-
-    # Get disabled autos...
-    dbshell.execute("SELECT name FROM bcamp_automations WHERE enabled = (?);", 
-        ('False',))
-    disabled_result = dbshell.fetchall()
-    disabled_return = []
-    for item in disabled_result:
-        disabled_return.append(item[0])
-
-    # Close connection to DB and return results.
-    dbcon.close()
-    return enabled_return, disabled_return # Results are tuples
-
-def query_automation(target_auto, column):
-    '''
-    Returns a single column from the Automations table for the defined
-    target automations.
-    '''
-    dbshell, dbcon = open_dbshell()
-    dbshell.execute("SELECT " + column + " FROM bcamp_automations WHERE name = (?);", 
-        (target_auto,))
-    result = dbshell.fetchone()
-    dbcon.close()
-    return result[0] # Results are tuples, but we expect ONLY 1 value here.
-
-def update_automation(target_auto, column, value):
-    '''
-    Updates a column value for a specific target automation with the new 
-    'value' variable
-    '''
-    dbshell, dbcon = open_dbshell()
-    
-    dbshell.execute("UPDATE bcamp_automations SET " + column + " = (?) WHERE name = (?)", (value, target_auto))
-    dbcon.commit() # save changes
-    dbcon.close()
-    print("SQLite3: *bcamp_automations*:",target_auto, column, "=", value)
-
-
-'''
 [SimpleParser Engine]
 
 The below class provides further scalability of bCamp by leveraging 
@@ -2259,8 +3469,6 @@ The below class provides further scalability of bCamp by leveraging
 configuration of keyword, line, or regex rules for a target file. Automating
 some of the effort for common data such as versioning.
 '''
-
-
 class SimpleParser():
     '''
     This class is initalized *EVERYTIME* a file-record is refreshed for a 
@@ -2518,7 +3726,7 @@ class SimpleParser():
         results_file.write("\n")
         results_file.write("Date : " + str(new_ran_time) + "\n")
         results_file.write("SR Number : " + self.key_val + "\n")
-        results_file.write("Directory : " + query_sr(self.key_val, 'remote_path') + "\n")
+        results_file.write("Directory : " + query_case(self.key_val, 'remote_path') + "\n")
         results_file.write("\n\n")
 
         # ** LINE RESULTS ** 
@@ -2695,7 +3903,6 @@ def get_max_prule():
 These methods define the format for the 'allnotes_X' and 'casenotes_X' text
 files generated when a user wants to export their notes from the UI.
 '''
-
 def gen_casenotes(key_val, outfile):
     '''
     Defines the format of the CaseNotes within the output file.
@@ -2704,7 +3911,7 @@ def gen_casenotes(key_val, outfile):
     outfile.write("[Case Notes]")
     outfile.write("\n\n")
     # Getting saved case notes in DB.
-    casenotes_val = query_sr(key_val, 'notes')
+    casenotes_val = query_case(key_val, 'notes')
     # Writing to outfile
     if casenotes_val != None:
         casenotes_linesplit = casenotes_val.splitlines()
@@ -2720,7 +3927,7 @@ def gen_filenotes(key_val, outfile):
     '''
  #File Notes Stack
     # Store local_path for later.
-    local_path = query_sr(key_val, 'local_path')
+    local_path = query_case(key_val, 'local_path')
 
     outfile.write("\n")    
     outfile.write("\n")    
@@ -2843,7 +4050,6 @@ def from_win_clipboard_str():
 
 Shortcuts to make life easy, and save some sanity!
 '''
-
 class callbackVar:
     '''
     Registers Var as a callback method. Used for 'events' throughout the UI.
@@ -2869,6 +4075,7 @@ class callbackVar:
 
     def register_callback(self, callback):
         self._callbacks.append(callback)
+
 
 def smart_grid(parent, *args, **kwargs): # *args are the widgets!
     '''
@@ -2906,52 +4113,6 @@ def smart_grid(parent, *args, **kwargs): # *args are the widgets!
         parent.update_idletasks() # update() # 
         return row + 1
                 
-def bulk_importer(import_item):
-    '''
-    Method used to import multiple
-    '''
-    def start_bulk_import(import_item, sr_num, product, account):
-        # Creating "import_item" Dictionary
-        new_import_dict = {
-            # Required Dict Vals
-            'sr_number': sr_num,
-            #'remote_path': None,  # Set in Finalize...
-            #'local_path': None, # Set in Finalize...
-            'pinned': 0, # Default = !Pinned
-            # Import/Calculated Values
-            'product': product.strip(),
-            'account': account.strip(),
-            #'import_time': None,
-            #'last_ran_time': None,
-            # Untouched Dict Vals for bulk
-            'bug_id': None,
-            'workspace': None,
-            'notes': None,
-            'tags_list': None,
-            'customs_list': None
-        }
-        # Updating "import_item" -> Gui.import_handler(new_import_dict)
-        import_item.value = new_import_dict
-
-    # Prompt user for file to import from.
-    src_file = filedialog.askopenfilename(
-        initialdir="/",
-        title="Basecamp Bulk Importer - Select a source import file!",
-        filetypes=[("Text files",
-                    "*.txt*")])
-
-    # Open resulting file
-    print("USER SELECTED IMPORT FILE:", src_file)
-    ifile = open(src_file, 'r')
-    ifile_content = ifile.readlines()
-    # Read lines of "ifile" and import one, by one.
-    for line in ifile_content:
-        print("-->", line)
-        # Splitting string to parse for account, and product vals.
-        split_line = line.split(', ')
-        # Order -> Sr_Num, Product, Account S
-        start_bulk_import(import_item, split_line[0], split_line[1], split_line[2])
-
 def destroy_sr(key_val):
     '''
     Deletes all tables, UI elements and files stored locally for a target SR 
@@ -3112,8 +4273,8 @@ def scrub_fpath(file_path, key_val):
     '''
     # Determine 'clean_path' - This is the parent file *AFTER* the 
     # remote/local dir.
-    r_root = query_sr(key_val, 'remote_path')
-    l_root = query_sr(key_val, 'local_path')
+    r_root = query_case(key_val, 'remote_path')
+    l_root = query_case(key_val, 'local_path')
     print("$.scrub", file_path)
 
     if r_root in file_path:
@@ -3139,12 +4300,12 @@ def check_newfiles(key_val):
     If the result is '>' than the "last_file_count", this method returns True. 
     '''
     #First, store the "last_file_count" number from the DB.
-    og_count = query_sr(key_val, 'last_file_count')
+    og_count = query_case(key_val, 'last_file_count')
     print("$\nog>", og_count)
 
     #Second, count the number of files or dirs present at root only.
         #Getting key_val root path
-    rootpath = query_sr(key_val, 'remote_path')
+    rootpath = query_case(key_val, 'remote_path')
         #Counting...
     try:
         fresh_count = len(os.listdir(rootpath))
@@ -3198,4 +4359,10 @@ def set_devMode(enable_bool):
         update_config('remote_root', dev_nas)
         print("devMode> ENABLED! Setting remote server to '\_dev_nas'")
 
+    # Create JIRA-API Password file in *_dev_nas
+    secretsrc = BCAMP_ROOTPATH + "\\" + '_dev_nas' + '\\' + 'jira.secret'
+    if not os.access(secretsrc, os.R_OK):
+        secfile = open(secretsrc, "w")
+        secfile.close()
+    
 # EOF

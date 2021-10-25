@@ -15,8 +15,10 @@ import logging
 import pathlib
 import sqlite3
 
+BCAMP_ROOTPATH = bcamp_api.BCAMP_ROOTPATH
 
-class CreateDirs():
+
+class CreateDirs:
     '''
     Creates the default folder structure on install. 
     '''
@@ -37,6 +39,7 @@ class CreateDirs():
         if not os.access(automations_path, os.R_OK):
             os.makedirs(automations_path)
 
+
 class CreateDB:
     '''
     Creates the 'basecamp.db' SQLite3 File - and populates it with the 
@@ -48,7 +51,6 @@ class CreateDB:
     SHOULD NOT TAKE INPUT FROM USERS. THIS WILL EXPOSE THE DB TO SQL
     INJECTION. 
     '''
-
     def __init__(self):
         self.RPATH = str(pathlib.Path(__file__).parent.absolute()).rpartition('\\')[0]
         db_path = self.RPATH + "\\core\\basecamp.db"
@@ -63,6 +65,8 @@ class CreateDB:
             file.close()
             print("Successfully created basecamp.db file")
 
+        # Configure Environment Vars
+        self.config_env()
         # Connecting to sqlite DB
         self.db_connection = sqlite3.connect(db_path)
         # Create default tables
@@ -83,6 +87,9 @@ class CreateDB:
         # Close connection - Jobs Done!
         self.db_connection.commit()
         self.dbshell.close()
+
+    def config_env(self):
+        os.environ['BCAMP'] = 'null'
 
     def config_schema(self):
         '''
@@ -105,7 +112,7 @@ class CreateDB:
                         ui_caseviewer_search_location TEXT NOT NULL,
                         ui_render_caseviewer_search TEXT NOT NULL,
                         ui_render_favtree TEXT NOT NULL,
-                        user_texteditor TEXT NOT NULL                       
+                        user_texteditor TEXT NOT NULL                     
              ); """
         return query
 
@@ -127,7 +134,23 @@ class CreateDB:
                         files_table TEXT,
                         import_time TEXT,
                         last_ran_time TEXT,
-                        last_file_count TEXT
+                        last_file_count TEXT,
+                        jira_title TEXT,
+                        jira_status TEXT,
+                        jira_updated TEXT,
+                        jira_description TEXT,
+                        jira_sr_owner TEXT,
+                        jira_comments TEXT,
+                        jira_last_comment_time TEXT,
+                        jira_linkedissues TEXT COLLATE NOCASE,
+                        jira_project TEXT,
+                        jira_priority TEXT,
+                        jira_components TEXT,
+                        jira_affected_ver TEXT,
+                        jira_resolution TEXT,
+                        jira_fix_ver TEXT,
+                        jira_notify_flag INTEGER,
+                        file_notify_flag INTEGER
              ); """
         return query
 
@@ -142,13 +165,13 @@ class CreateDB:
                         name TEXT UNIQUE,
                         enabled TEXT NOT NULL,
                         version TEXT NOT NULL,
-                        py_path TEXT NOT NULL,
-                        py_md5 TEXT NOT NULL,
+                        exe_path TEXT NOT NULL,
+                        exe_sha256 TEXT NOT NULL,
                         downloadFirst TEXT NOT NULL,
                         author TEXT,
                         description TEXT,
                         extensions TEXT,
-                        exe_paths TEXT,
+                        user_options TEXT,
                         type TEXT
              ); """
         return query
@@ -207,3 +230,76 @@ class CreateDB:
                         rule TEXT NOT NULL
         ); """
         return query
+
+
+class CheckReqs:
+    '''
+    Checks the required packages are available for import.
+    '''
+    proxy_address = 'webgateway.itm.mcafee.com'
+    proxy_port = '9090'
+    missing_mods = []
+    #3rd Party Bois
+    try:
+        import paramiko
+    except:
+        missing_mods.append('paramiko')
+    try:
+        from sshtunnel import SSHTunnelForwarder
+    except:
+        missing_mods.append('sshtunnel')
+    try:
+        import requests
+    except:
+        missing_mods.append('requests')
+    
+    if missing_mods != None:
+        # Create file in install location containing commands...
+        reqs_file = open((BCAMP_ROOTPATH + 'MISSING_REQUIREMENTS.txt'), 'w+')
+        for item in missing_mods:
+            pip_string = (
+                'python -m pip install --proxy=http://username:password@' 
+                + proxy_address 
+                + ':' 
+                + proxy_port
+                + ' ' + item
+            )
+            
+            reqs_file.write(pip_string)
+            print("MISSING REQUIRED MODULE -", item, "- Install this using...")
+            print("\tpython -m pip install", item)
+            print("\tProxy?")
+            print("\tpython -m pip install --proxy=http://[username:password]@proxyserver:port", item)
+        # Close FILE
+        reqs_file.close()
+
+    # ITEMS ALL IN STDLIB
+    ## Private imports
+    #import bcamp_api
+    #import bcamp_setup
+    ## Public Imports
+    #import io
+    #import os
+    #import re
+    #import stat
+    #import json
+    #import time
+    #import queue
+    #import ctypes
+    #import shutil
+    #import pickle
+    #import pprint
+    #import hashlib
+    #import logging
+    #import sqlite3
+    #import pathlib
+    #import datetime
+    #import importlib
+    #import threading
+    #import webbrowser
+    #import py_compile
+    #import subprocess
+    #import tkinter as tk
+    #import tkinter.font as tk_font
+    #from tkinter import ttk, colorchooser, filedialog, dnd
+    #from optparse import OptionParser

@@ -1,0 +1,11 @@
+{
+    "author": "Collin Spears, Network TSE",
+    "version": "0.1",
+    "extensions": "ANY",
+    "description": "Transfers files to the FTP Server Defined below, automatically creating a tunnel to the Plano RepLab network.",
+    "options": [{"name":"Directory", "string":"/username"},
+            {"name":"SFTP Server Address", "string":"0.0.0.0"},
+            {"name":"Jump Server Address", "string":"DNVESSSFTP01.CORPZONE.INTERNALZONE.COM"}],
+    "downloadFirst": true,
+    "type": "custom"
+}
