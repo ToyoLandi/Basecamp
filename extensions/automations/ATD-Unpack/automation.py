@@ -12,24 +12,28 @@ ATD has many 3 steps to go from an encrypted file, to a readable format.
 3 - Unzip final.zip to access Folders/Logs.
 
 '''
+# **REQUIRED IMPORTS
 import os
+import json
+from optparse import OptionParser
+
+# Custom Imports
 import shutil
-import zipfile
 import subprocess
 
-def run(target_file_path, local_path_of_target, exe_paths):
+def __bcamp_main__(target_file_path, local_path_of_target, user_options):
     file_name = os.path.basename(target_file_path)
     # [0] is whole path, minus '.bin' due to os.splitext()
     result_path = os.path.splitext(local_path_of_target)[0]
     # .exe list in JSON, atd-unpacker.exe and 7-zip for ZIP decryption.
-    atd_unpacker = exe_paths[0]
-    zip_exe = exe_paths[1]
+    atd_unpacker = user_options['ATD Unpacker']['val']
+    zip_exe = user_options['7-ZIP']['val']
 
     # Debug Logging
     print("***", "\n",
         "target_file_path:", target_file_path, "\n",
         "local_path_of_target:", local_path_of_target, "\n",
-        "exe_paths:", exe_paths, "\n",
+        "exe_paths:", user_options, "\n",
         "***")
 
     # Unpack the local file with subprocess. 
@@ -60,4 +64,20 @@ def run(target_file_path, local_path_of_target, exe_paths):
     print("JOBS DONE!")
     return
 
+# **REQUIRED BOOTSTRAP FOR .PY->.EXE
+if __name__ == "__main__":
+    parser = OptionParser()
+    # Switches based on user-defined options in UI.
+    parser.add_option('-i','--input-params', dest = 'input_params',
+                      help="Parameters used by the '__bcamp_main__' method")
+    (options,args) = parser.parse_args()
+    # Getting Params from .exe optional params.
+    params = json.loads(options.input_params)
+    print(params)
+    # Passing params to '__bcamp_main__' - Method called through UI.
+    __bcamp_main__(
+        target_file_path=params['target_path'],
+        local_path_of_target=params['local_target_path'], 
+        user_options=params['options']
+    )
 

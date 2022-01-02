@@ -1,0 +1,9 @@
+{
+    "author": "Collin Spears, Network TSE",
+    "version": "1.1",
+    "extensions": ".zip",
+    "description": "Extracts .zip, and .tar* archives",
+    "options": null,
+    "downloadFirst": false,
+    "type": "unpack"
+}
